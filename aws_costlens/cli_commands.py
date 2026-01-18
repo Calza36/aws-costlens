@@ -19,14 +19,16 @@ console = Console(force_terminal=True, legacy_windows=False)
 
 
 def welcome_banner() -> None:
-    """Display the welcome banner."""
-    banner = """
-[bold cyan]╔═══════════════════════════════════════════════╗
-║     AWS CostLens - Cost Intelligence Tool     ║
-╚═══════════════════════════════════════════════╝[/]
-"""
-    console.print(banner)
-    console.print(f"[dim]Version {__version__}[/]\n")
+    """Display the welcome banner with version."""
+    # Compact banner with version on the right
+    console.print()
+    console.print(
+        "[bold bright_cyan]╔═══════════════════════════════════════════════╗[/]  "
+        f"[dim italic]v{__version__}[/]"
+    )
+    console.print("[bold bright_cyan]║     AWS CostLens - Cost Intelligence Tool     ║[/]")
+    console.print("[bold bright_cyan]╚═══════════════════════════════════════════════╝[/]")
+    console.print()  # Single line space before content
 
 
 def parse_tags(tag_strings: Optional[List[str]]) -> Optional[Dict[str, str]]:

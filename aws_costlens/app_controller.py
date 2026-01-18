@@ -82,7 +82,7 @@ def run_dashboard(
         tags: Tag filters
     """
     # Initialize profiles
-    with Status("[bright_cyan]Initialising...", spinner="aesthetic", speed=0.4):
+    with Status("[bright_cyan]🔄 Connecting to AWS...", spinner="dots12", speed=0.1):
         profiles_to_use = _initialize_profiles(profiles, all_profiles)
         if not profiles_to_use:
             return 1
@@ -151,8 +151,9 @@ def _run_audit_report(
     s3_bucket: Optional[str],
     s3_prefix: Optional[str],
 ) -> None:
-    """Generate and export an audit report."""
-    console.print("[bold bright_cyan]Preparing your audit report...[/]")
+    """Generate and export a resource scan report."""
+    console.print("[bold bright_green]⚡ Scanning resources...[/]")
+    console.print("[dim]Checking: EC2, RDS, Lambda, ELBv2[/]\n")
     
     table = Table(
         Column("Profile", justify="center"),
@@ -162,10 +163,10 @@ def _run_audit_report(
         Column("Unused Volumes"),
         Column("Unused EIPs"),
         Column("Budget Alerts"),
-        title="AWS CostLens Audit Report",
+        title="🔍 Resource Scan Results",
         show_lines=True,
         box=box.ASCII_DOUBLE_HEAD,
-        style="bright_cyan",
+        style="bright_green",
     )
 
     audit_data = []
@@ -242,7 +243,7 @@ def _run_audit_report(
         )
 
     console.print(table)
-    console.print("[bold bright_cyan]Note: The dashboard only lists untagged EC2, RDS, Lambda, ELBv2.\n[/]")
+    # Note already shown at the start of scan
 
     # Export if requested
     if report_name and report_types:
@@ -276,7 +277,7 @@ def _run_trend_analysis(
     tags: Optional[Dict[str, str]],
 ) -> None:
     """Analyze and display cost trends."""
-    console.print("[bold bright_cyan]Analysing cost trends...[/]")
+    console.print("[bold bright_magenta]📊 Loading cost history...[/]")
     raw_trend_data = []
 
     if combine:
@@ -368,12 +369,12 @@ def create_display_table(
         Column("AWS Account Profile", justify="center", vertical="middle"),
         Column(f"{previous_period_name}\n({previous_period_dates})", justify="center", vertical="middle"),
         Column(f"{current_period_name}\n({current_period_dates})", justify="center", vertical="middle"),
-        Column("Previous Period Cost By Service", vertical="middle"),
-        Column("Current Period Cost By Service", vertical="middle"),
+        Column("Previous Costs by Service", vertical="middle"),
+        Column("Current Costs by Service", vertical="middle"),
         Column("Budget Status", vertical="middle"),
-        Column("EC2 Instance Summary", justify="center", vertical="middle"),
-        title="AWS CostLens Dashboard",
-        caption="AWS CostLens CLI",
+        Column("EC2 Summary", justify="center", vertical="middle"),
+        title="💰 Spending Overview",
+        caption="CostLens",
         box=box.ASCII_DOUBLE_HEAD,
         show_lines=True,
         style="bright_cyan",
@@ -430,7 +431,7 @@ def _run_cost_dashboard(
     tags: Optional[Dict[str, str]],
 ) -> None:
     """Run cost dashboard and generate reports."""
-    with Status("[bright_cyan]Initialising dashboard...", spinner="aesthetic", speed=0.4):
+    with Status("[bright_cyan]💰 Preparing dashboard...", spinner="dots12", speed=0.1):
         (
             previous_period_name,
             current_period_name,
@@ -461,7 +462,7 @@ def _run_cost_dashboard(
                 console.log(f"[bold red]Error checking account ID for profile {profile}: {str(e)}[/]")
 
         for account_id_key, profile_list in track(
-            account_profiles.items(), description="[bright_cyan]Fetching cost data..."
+            account_profiles.items(), description="[bright_cyan]Retrieving AWS costs..."
         ):
             if len(profile_list) > 1:
                 profile_data = process_combined_profiles(
@@ -474,7 +475,7 @@ def _run_cost_dashboard(
             export_data.append(profile_data)
             add_profile_to_table(table, profile_data)
     else:
-        for profile in track(profiles_to_use, description="[bright_cyan]Fetching cost data..."):
+        for profile in track(profiles_to_use, description="[bright_cyan]Retrieving AWS costs..."):
             profile_data = process_single_profile(profile, user_regions, time_range, tags)
             export_data.append(profile_data)
             add_profile_to_table(table, profile_data)

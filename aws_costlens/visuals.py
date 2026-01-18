@@ -80,8 +80,8 @@ def create_trend_bars(monthly_costs: List[Tuple[str, float]]) -> None:
     console.print(
         Panel(
             table,
-            title="[cyan]AWS Cost Trend Analysis[/]",
-            border_style="bright_blue",
+            title="[bright_magenta]📈 Cost History (6 months)[/]",
+            border_style="bright_magenta",
             padding=(1, 1),
         )
     )
