@@ -106,18 +106,20 @@ def process_single_profile(
 
 
 def process_combined_profiles(
+    account_id: str,
     profiles: List[str],
     regions: Optional[List[str]] = None,
     time_range: Optional[Union[int, str]] = None,
     tags: Optional[Dict[str, str]] = None,
 ) -> ProfileData:
     """
-    Process and merge cost data from multiple profiles.
+    Process and merge cost data from multiple profiles for the same account.
 
-    This aggregates costs across profiles that belong to the same account
-    or different accounts, providing a unified view.
+    This aggregates costs across profiles that belong to the same account,
+    providing a unified view.
 
     Args:
+        account_id: The AWS account ID
         profiles: List of AWS CLI profile names
         regions: Optional list of regions
         time_range: Optional time range

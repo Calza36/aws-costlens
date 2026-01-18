@@ -61,18 +61,20 @@ def clean_rich_tags(text: str) -> str:
 
 
 def export_cost_dashboard_to_pdf(
-    profile_data: Dict,
-    current_period: str,
-    previous_period: str,
+    export_data: List[Dict],
+    report_name: str,
+    previous_period_dates: str,
+    current_period_dates: str,
     output_path: Optional[str] = None,
 ) -> bytes:
     """
     Export cost dashboard to PDF format.
 
     Args:
-        profile_data: Dictionary with profile cost data
-        current_period: Name of current period
-        previous_period: Name of previous period
+        export_data: List of profile data dictionaries
+        report_name: Report name
+        previous_period_dates: Previous period date range
+        current_period_dates: Current period date range
         output_path: Optional path to save PDF
 
     Returns:
@@ -90,50 +92,58 @@ def export_cost_dashboard_to_pdf(
     styles = getSampleStyleSheet()
     story = []
 
-    # Title
-    title = Paragraph(
-        f"<b>AWS Cost Report - {profile_data.get('profile', 'N/A')}</b>",
-        styles["Heading1"],
-    )
-    story.append(title)
-    story.append(Spacer(1, 0.2 * inch))
+    # Main Title
+    story.append(Paragraph(f"<b>AWS CostLens Report</b>", styles["Heading1"]))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
+    story.append(Spacer(1, 0.3 * inch))
 
-    # Summary
-    story.append(miniHeader("Summary"))
-    pct = profile_data.get("percent_change_in_total_cost")
-    pct_str = f"{pct:+.1f}%" if pct is not None else "N/A"
+    for i, profile_data in enumerate(export_data):
+        if i > 0:
+            story.append(PageBreak())
 
-    summary_rows = [
-        ("Account ID", profile_data.get("account_id", "N/A")),
-        (current_period, f"${profile_data.get('current_month', 0):,.2f}"),
-        (previous_period, f"${profile_data.get('last_month', 0):,.2f}"),
-        ("Change", pct_str),
-    ]
-    story.append(keyValueTable(summary_rows))
-    story.append(Spacer(1, 0.2 * inch))
+        # Profile Title
+        story.append(Paragraph(
+            f"<b>Profile: {profile_data.get('profile', 'N/A')}</b>",
+            styles["Heading2"],
+        ))
+        story.append(Spacer(1, 0.2 * inch))
 
-    # Top Services - Current
-    story.append(miniHeader(f"Highest Cost Services - {current_period}"))
-    services = profile_data.get("service_costs", [])
-    story.append(bulletList(formatServicesForList(services)))
-    story.append(Spacer(1, 0.2 * inch))
+        # Summary
+        story.append(miniHeader("Summary"))
+        pct = profile_data.get("percent_change_in_total_cost")
+        pct_str = f"{pct:+.1f}%" if pct is not None else "N/A"
 
-    # Top Services - Previous
-    story.append(miniHeader(f"Highest Cost Services - {previous_period}"))
-    prev_services = profile_data.get("previous_service_costs", [])
-    story.append(bulletList(formatServicesForList(prev_services)))
-    story.append(Spacer(1, 0.2 * inch))
+        summary_rows = [
+            ("Account ID", profile_data.get("account_id", "N/A")),
+            (f"Current ({current_period_dates})", f"${profile_data.get('current_month', 0):,.2f}"),
+            (f"Previous ({previous_period_dates})", f"${profile_data.get('last_month', 0):,.2f}"),
+            ("Change", pct_str),
+        ]
+        story.append(keyValueTable(summary_rows))
+        story.append(Spacer(1, 0.2 * inch))
 
-    # Budgets
-    story.append(miniHeader("Budgets"))
-    budgets = profile_data.get("budget_info", ["No budgets configured"])
-    story.append(bulletList([clean_rich_tags(b) for b in budgets]))
-    story.append(Spacer(1, 0.2 * inch))
+        # Top Services - Current
+        story.append(miniHeader("Highest Cost Services - Current Period"))
+        services = profile_data.get("service_costs", [])
+        story.append(bulletList(formatServicesForList(services)))
+        story.append(Spacer(1, 0.2 * inch))
 
-    # EC2 Summary
-    story.append(miniHeader("EC2 Summary"))
-    ec2 = profile_data.get("ec2_summary_formatted", ["No data"])
-    story.append(bulletList(ec2))
+        # Top Services - Previous
+        story.append(miniHeader("Highest Cost Services - Previous Period"))
+        prev_services = profile_data.get("previous_service_costs", [])
+        story.append(bulletList(formatServicesForList(prev_services)))
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Budgets
+        story.append(miniHeader("Budgets"))
+        budgets = profile_data.get("budget_info", ["No budgets configured"])
+        story.append(bulletList([clean_rich_tags(b) for b in budgets]))
+        story.append(Spacer(1, 0.2 * inch))
+
+        # EC2 Summary
+        story.append(miniHeader("EC2 Summary"))
+        ec2 = profile_data.get("ec2_summary_formatted", ["No data"])
+        story.append(bulletList(ec2))
 
     # Build PDF
     doc.build(story)
@@ -149,16 +159,16 @@ def export_cost_dashboard_to_pdf(
 
 
 def export_audit_report_to_pdf(
-    audit_data: Dict,
-    profile: str,
+    audit_data: List[Dict],
+    report_name: str,
     output_path: Optional[str] = None,
 ) -> bytes:
     """
     Export audit/scan report to PDF.
 
     Args:
-        audit_data: Dictionary with scan findings
-        profile: Profile name
+        audit_data: List of audit data dictionaries
+        report_name: Report name
         output_path: Optional save path
 
     Returns:
@@ -176,57 +186,60 @@ def export_audit_report_to_pdf(
     styles = getSampleStyleSheet()
     story = []
 
-    # Title
-    story.append(Paragraph(f"<b>AWS Resource Scan - {profile}</b>", styles["Heading1"]))
-    story.append(Spacer(1, 0.2 * inch))
+    # Main Title
+    story.append(Paragraph(f"<b>AWS CostLens Audit Report</b>", styles["Heading1"]))
     story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
     story.append(Spacer(1, 0.3 * inch))
 
-    # Stopped Instances
-    story.append(miniHeader("Stopped EC2 Instances"))
-    stopped = audit_data.get("stopped_instances", {})
-    if stopped:
-        for region, ids in stopped.items():
-            story.append(paragraphStyling(f"<b>{region}:</b>"))
-            story.append(bulletList(ids))
-    else:
-        story.append(paragraphStyling("None found"))
-    story.append(Spacer(1, 0.2 * inch))
+    for i, data in enumerate(audit_data):
+        if i > 0:
+            story.append(PageBreak())
 
-    # Unused Volumes
-    story.append(miniHeader("Unused EBS Volumes"))
-    volumes = audit_data.get("unused_volumes", {})
-    if volumes:
-        for region, ids in volumes.items():
-            story.append(paragraphStyling(f"<b>{region}:</b>"))
-            story.append(bulletList(ids))
-    else:
-        story.append(paragraphStyling("None found"))
-    story.append(Spacer(1, 0.2 * inch))
+        profile = data.get("profile", "Unknown")
+        story.append(Paragraph(f"<b>Profile: {profile}</b>", styles["Heading2"]))
+        story.append(Paragraph(f"Account: {data.get('account_id', 'Unknown')}", styles["Normal"]))
+        story.append(Spacer(1, 0.2 * inch))
 
-    # Unused EIPs
-    story.append(miniHeader("Unused Elastic IPs"))
-    eips = audit_data.get("unused_eips", {})
-    if eips:
-        for region, ips in eips.items():
-            story.append(paragraphStyling(f"<b>{region}:</b>"))
-            story.append(bulletList(ips))
-    else:
-        story.append(paragraphStyling("None found"))
-    story.append(Spacer(1, 0.2 * inch))
+        # Stopped Instances
+        story.append(miniHeader("Stopped EC2 Instances"))
+        stopped_str = data.get("stopped_instances", "None")
+        if stopped_str and stopped_str != "None":
+            story.append(bulletList(split_to_items(stopped_str)))
+        else:
+            story.append(paragraphStyling("None found"))
+        story.append(Spacer(1, 0.2 * inch))
 
-    # Untagged Resources
-    story.append(miniHeader("Untagged Resources"))
-    untagged = audit_data.get("untagged_resources", {})
-    if untagged:
-        for service, regions in untagged.items():
-            if regions:
-                story.append(paragraphStyling(f"<b>{service}:</b>"))
-                for region, ids in regions.items():
-                    story.append(paragraphStyling(f"  {region}:"))
-                    story.append(bulletList(ids))
-    else:
-        story.append(paragraphStyling("None found"))
+        # Unused Volumes
+        story.append(miniHeader("Unused EBS Volumes"))
+        volumes_str = data.get("unused_volumes", "None")
+        if volumes_str and volumes_str != "None":
+            story.append(bulletList(split_to_items(volumes_str)))
+        else:
+            story.append(paragraphStyling("None found"))
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Unused EIPs
+        story.append(miniHeader("Unused Elastic IPs"))
+        eips_str = data.get("unused_eips", "None")
+        if eips_str and eips_str != "None":
+            story.append(bulletList(split_to_items(eips_str)))
+        else:
+            story.append(paragraphStyling("None found"))
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Untagged Resources
+        story.append(miniHeader("Untagged Resources"))
+        untagged_str = data.get("untagged_resources", "None")
+        if untagged_str and untagged_str != "None":
+            story.append(bulletList(split_to_items(untagged_str)))
+        else:
+            story.append(paragraphStyling("None found"))
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Budget Alerts
+        story.append(miniHeader("Budget Alerts"))
+        alerts_str = data.get("budget_alerts", "No budgets exceeded")
+        story.append(paragraphStyling(alerts_str))
 
     doc.build(story)
     buffer.seek(0)
@@ -235,12 +248,12 @@ def export_audit_report_to_pdf(
     if output_path:
         with open(output_path, "wb") as f:
             f.write(pdf_bytes)
-        console.print(f"[green]✓ Scan PDF saved to {output_path}[/]")
+        console.print(f"[green]✓ Audit PDF saved to {output_path}[/]")
 
     return pdf_bytes
 
 
-def export_audit_report_to_csv(audit_data: Dict, output_path: Optional[str] = None) -> str:
+def export_audit_report_to_csv(audit_data: List[Dict], output_path: Optional[str] = None) -> str:
     """Export scan report to CSV format."""
     import csv
     from io import StringIO
@@ -248,63 +261,63 @@ def export_audit_report_to_csv(audit_data: Dict, output_path: Optional[str] = No
     output = StringIO()
     writer = csv.writer(output)
 
-    writer.writerow(["Category", "Region", "Resource ID"])
+    writer.writerow(["Profile", "Account ID", "Category", "Details"])
 
-    for region, ids in audit_data.get("stopped_instances", {}).items():
-        for id in ids:
-            writer.writerow(["Stopped EC2", region, id])
-
-    for region, ids in audit_data.get("unused_volumes", {}).items():
-        for id in ids:
-            writer.writerow(["Unused Volume", region, id])
-
-    for region, ips in audit_data.get("unused_eips", {}).items():
-        for ip in ips:
-            writer.writerow(["Unused EIP", region, ip])
-
-    for service, regions in audit_data.get("untagged_resources", {}).items():
-        for region, ids in regions.items():
-            for id in ids:
-                writer.writerow([f"Untagged {service}", region, id])
+    for data in audit_data:
+        profile = data.get("profile", "Unknown")
+        account_id = data.get("account_id", "Unknown")
+        
+        writer.writerow([profile, account_id, "Stopped EC2", data.get("stopped_instances", "None")])
+        writer.writerow([profile, account_id, "Unused Volumes", data.get("unused_volumes", "None")])
+        writer.writerow([profile, account_id, "Unused EIPs", data.get("unused_eips", "None")])
+        writer.writerow([profile, account_id, "Untagged Resources", data.get("untagged_resources", "None")])
+        writer.writerow([profile, account_id, "Budget Alerts", data.get("budget_alerts", "None")])
+        writer.writerow([])
 
     csv_content = output.getvalue()
 
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(csv_content)
-        console.print(f"[green]✓ Scan CSV saved to {output_path}[/]")
+        console.print(f"[green]✓ Audit CSV saved to {output_path}[/]")
 
     return csv_content
 
 
-def export_audit_report_to_json(audit_data: Dict, output_path: Optional[str] = None) -> str:
+def export_audit_report_to_json(audit_data: List[Dict], output_path: Optional[str] = None) -> str:
     """Export scan report to JSON format."""
-    json_content = json.dumps(audit_data, indent=2)
+    output = {
+        "report_type": "audit",
+        "generated": datetime.now().isoformat(),
+        "profiles": audit_data,
+    }
+    json_content = json.dumps(output, indent=2)
 
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(json_content)
-        console.print(f"[green]✓ Scan JSON saved to {output_path}[/]")
+        console.print(f"[green]✓ Audit JSON saved to {output_path}[/]")
 
     return json_content
 
 
 def export_trend_data_to_json(
-    monthly_costs: List[Tuple[str, float]],
-    profile: str,
+    trend_data: List[Dict],
+    report_name: str,
     output_path: Optional[str] = None,
 ) -> str:
     """Export cost history data to JSON format."""
-    data = {
-        "profile": profile,
+    output = {
+        "report_name": report_name,
+        "report_type": "trend",
         "generated": datetime.now().isoformat(),
-        "monthly_costs": [{"month": m, "cost": c} for m, c in monthly_costs],
+        "data": trend_data,
     }
-    json_content = json.dumps(data, indent=2)
+    json_content = json.dumps(output, indent=2)
 
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(json_content)
-        console.print(f"[green]✓ History JSON saved to {output_path}[/]")
+        console.print(f"[green]✓ Trend JSON saved to {output_path}[/]")
 
     return json_content

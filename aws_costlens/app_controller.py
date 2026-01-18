@@ -1,25 +1,40 @@
 """Main application controller for AWS CostLens."""
 
 import os
+from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import boto3
+from rich import box
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
+from rich.progress import track
+from rich.status import Status
+from rich.table import Column, Table
+
+# Setup UTF-8 console for Windows
+from aws_costlens.console_setup import setup_console
+setup_console()
 
 from aws_costlens.aws_api import (
     get_accessible_regions,
+    get_account_id,
     get_aws_profiles,
+    get_budgets,
     get_stopped_instances,
     get_unused_eips,
     get_unused_volumes,
     get_untagged_resources,
 )
-from aws_costlens.cost_controller import export_to_csv, export_to_json, get_trend
+from aws_costlens.cost_controller import (
+    export_to_csv,
+    export_to_json,
+    get_cost_data,
+    get_trend,
+)
 from aws_costlens.report_exporter import ExportHandler
 from aws_costlens.common_utils import (
+    clean_rich_tags,
     export_audit_report_to_csv,
     export_audit_report_to_json,
     export_audit_report_to_pdf,
@@ -28,8 +43,8 @@ from aws_costlens.common_utils import (
 )
 from aws_costlens.profiles_controller import process_combined_profiles, process_single_profile
 from aws_costlens.visuals import create_trend_bars
+from aws_costlens.models import ProfileData
 
-# Force UTF-8 and modern Windows terminal mode for Unicode support
 console = Console(force_terminal=True, legacy_windows=False)
 
 
@@ -47,7 +62,7 @@ def run_dashboard(
     s3_prefix: Optional[str] = None,
     time_range: Optional[Union[int, str]] = None,
     tags: Optional[Dict[str, str]] = None,
-) -> None:
+) -> int:
     """
     Run the AWS CostLens application.
 
@@ -66,280 +81,424 @@ def run_dashboard(
         time_range: Custom time range
         tags: Tag filters
     """
-    # Determine profiles to process
-    if all_profiles:
-        profiles = get_aws_profiles()
-        if not profiles:
-            console.print("[bold red]No AWS profiles found[/]")
-            return
-        console.print(f"[cyan]Found {len(profiles)} profiles[/]")
-    elif not profiles:
-        profiles = ["default"]
+    # Initialize profiles
+    with Status("[bright_cyan]Initialising...", spinner="aesthetic", speed=0.4):
+        profiles_to_use = _initialize_profiles(profiles, all_profiles)
+        if not profiles_to_use:
+            return 1
 
-    # Setup export handler
-    handler = ExportHandler(
-        output_dir=output_dir or os.getcwd(),
+    # Run audit report if requested
+    if audit:
+        _run_audit_report(profiles_to_use, regions, report_name, report_types, output_dir, s3_bucket, s3_prefix)
+        return 0
+
+    # Run trend analysis if requested
+    if trend:
+        _run_trend_analysis(profiles_to_use, combine, report_name, report_types, output_dir, s3_bucket, s3_prefix, tags)
+        return 0
+
+    # Run main cost dashboard
+    _run_cost_dashboard(
+        profiles_to_use=profiles_to_use,
+        user_regions=regions,
+        combine=combine,
+        report_name=report_name,
+        report_types=report_types,
+        output_dir=output_dir,
         s3_bucket=s3_bucket,
         s3_prefix=s3_prefix,
-        profile=profiles[0] if profiles else None,
-    )
-
-    # Generate timestamp for report names
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = report_name or "costlens_report"
-
-    # Run scan if requested
-    if audit:
-        _run_scan(profiles, regions, handler, base_name, timestamp, report_types)
-        return
-
-    # Run history if requested
-    if trend:
-        _run_history(profiles, handler, base_name, timestamp, report_types)
-        return
-
-    # Run cost dashboard
-    _run_cost_dashboard(
-        profiles=profiles,
-        regions=regions,
-        combine=combine,
-        handler=handler,
-        base_name=base_name,
-        timestamp=timestamp,
-        report_types=report_types,
         time_range=time_range,
         tags=tags,
     )
+    return 0
 
 
-def _run_scan(
-    profiles: List[str],
+def _initialize_profiles(profiles: Optional[List[str]], all_profiles: bool) -> List[str]:
+    """Initialize AWS profiles based on arguments."""
+    available_profiles = get_aws_profiles()
+    if not available_profiles:
+        console.log("[bold red]No AWS profiles found. Please configure AWS CLI first.[/]")
+        return []
+
+    profiles_to_use = []
+    if profiles:
+        for profile in profiles:
+            if profile in available_profiles:
+                profiles_to_use.append(profile)
+            else:
+                console.log(f"[yellow]Warning: Profile '{profile}' not found in AWS configuration[/]")
+        if not profiles_to_use:
+            console.log("[bold red]None of the specified profiles were found in AWS configuration.[/]")
+            return []
+    elif all_profiles:
+        profiles_to_use = available_profiles
+    else:
+        if "default" in available_profiles:
+            profiles_to_use = ["default"]
+        else:
+            profiles_to_use = available_profiles
+            console.log("[yellow]No default profile found. Using all available profiles.[/]")
+
+    return profiles_to_use
+
+
+def _run_audit_report(
+    profiles_to_use: List[str],
     regions: Optional[List[str]],
-    handler: ExportHandler,
-    base_name: str,
-    timestamp: str,
+    report_name: Optional[str],
     report_types: Optional[List[str]],
+    output_dir: Optional[str],
+    s3_bucket: Optional[str],
+    s3_prefix: Optional[str],
 ) -> None:
-    """Run resource scan and generate reports."""
-    for profile in profiles:
-        console.print(f"\n[bold cyan]Scanning resources for: {profile}[/]")
+    """Generate and export an audit report."""
+    console.print("[bold bright_cyan]Preparing your audit report...[/]")
+    
+    table = Table(
+        Column("Profile", justify="center"),
+        Column("Account ID", justify="center"),
+        Column("Untagged Resources"),
+        Column("Stopped EC2 Instances"),
+        Column("Unused Volumes"),
+        Column("Unused EIPs"),
+        Column("Budget Alerts"),
+        title="AWS CostLens Audit Report",
+        show_lines=True,
+        box=box.ASCII_DOUBLE_HEAD,
+        style="bright_cyan",
+    )
+
+    audit_data = []
+    raw_audit_data = []
+    nl = "\n"
+    comma_nl = ",\n"
+
+    for profile in profiles_to_use:
+        session = boto3.Session(profile_name=profile)
+        account_id = get_account_id(session) or "Unknown"
+        check_regions = regions or get_accessible_regions(session)
 
         try:
-            session = boto3.Session(profile_name=profile)
-
-            # Get regions
-            if regions:
-                check_regions = regions
-            else:
-                check_regions = get_accessible_regions(session)
-                console.print(f"[dim]Checking {len(check_regions)} regions...[/]")
-
-            # Collect scan data
-            scan_data = {
-                "profile": profile,
-                "timestamp": timestamp,
-                "stopped_instances": get_stopped_instances(session, check_regions),
-                "unused_volumes": get_unused_volumes(session, check_regions),
-                "unused_eips": get_unused_eips(session, check_regions),
-                "untagged_resources": get_untagged_resources(session, check_regions),
-            }
-
-            # Display results
-            _display_scan_results(scan_data, profile)
-
-            # Export if requested
-            if report_types:
-                filename_base = f"{base_name}_{profile}_scan_{timestamp}"
-
-                if "pdf" in report_types:
-                    pdf_bytes = export_audit_report_to_pdf(scan_data, profile)
-                    handler.save_pdf(pdf_bytes, f"{filename_base}.pdf")
-
-                if "csv" in report_types:
-                    csv_content = export_audit_report_to_csv(scan_data)
-                    handler.save_csv(csv_content, f"{filename_base}.csv")
-
-                if "json" in report_types:
-                    json_content = export_audit_report_to_json(scan_data)
-                    handler.save_json(json_content, f"{filename_base}.json")
-
+            untagged = get_untagged_resources(session, check_regions)
+            anomalies = []
+            for service, region_map in untagged.items():
+                if region_map:
+                    service_block = f"[bright_yellow]{service}[/]:\n"
+                    for region, ids in region_map.items():
+                        if ids:
+                            ids_block = "\n".join(f"[orange1]{res_id}[/]" for res_id in ids)
+                            service_block += f"\n{region}:\n{ids_block}\n"
+                    anomalies.append(service_block)
+            if not any(region_map for region_map in untagged.values()):
+                anomalies = ["None"]
         except Exception as e:
-            console.print(f"[bold red]Error scanning {profile}: {str(e)}[/]")
+            anomalies = [f"Error: {str(e)}"]
 
+        stopped = get_stopped_instances(session, check_regions)
+        stopped_list = [f"{r}:\n[gold1]{nl.join(ids)}[/]" for r, ids in stopped.items()] or ["None"]
 
-def _display_scan_results(scan_data: Dict, profile: str) -> None:
-    """Display scan results in console."""
-    # Create summary table
-    table = Table(title=f"Resource Scan - {profile}", show_header=True)
-    table.add_column("Category", style="cyan")
-    table.add_column("Count", justify="right", style="yellow")
-    table.add_column("Details", style="dim")
+        unused_vols = get_unused_volumes(session, check_regions)
+        vols_list = [f"{r}:\n[dark_orange]{nl.join(ids)}[/]" for r, ids in unused_vols.items()] or ["None"]
 
-    # Stopped instances
-    stopped = scan_data.get("stopped_instances", {})
-    stopped_count = sum(len(ids) for ids in stopped.values())
-    stopped_regions = ", ".join(stopped.keys()) if stopped else "None"
-    table.add_row("Stopped EC2", str(stopped_count), stopped_regions)
+        unused_eips = get_unused_eips(session, check_regions)
+        eips_list = [f"{r}:\n{comma_nl.join(ids)}" for r, ids in unused_eips.items()] or ["None"]
 
-    # Unused volumes
-    volumes = scan_data.get("unused_volumes", {})
-    vol_count = sum(len(ids) for ids in volumes.values())
-    vol_regions = ", ".join(volumes.keys()) if volumes else "None"
-    table.add_row("Unused Volumes", str(vol_count), vol_regions)
+        budget_data = get_budgets(session)
+        alerts = []
+        for b in budget_data:
+            if b["actual"] > b["limit"]:
+                alerts.append(f"[red1]{b['name']}[/]: ${b['actual']:.2f} > ${b['limit']:.2f}")
+        if not alerts:
+            alerts = ["No budgets exceeded"]
 
-    # Unused EIPs
-    eips = scan_data.get("unused_eips", {})
-    eip_count = sum(len(ips) for ips in eips.values())
-    eip_regions = ", ".join(eips.keys()) if eips else "None"
-    table.add_row("Unused EIPs", str(eip_count), eip_regions)
+        audit_data.append({
+            "profile": profile,
+            "account_id": account_id,
+            "untagged_resources": clean_rich_tags("\n".join(anomalies)),
+            "stopped_instances": clean_rich_tags("\n".join(stopped_list)),
+            "unused_volumes": clean_rich_tags("\n".join(vols_list)),
+            "unused_eips": clean_rich_tags("\n".join(eips_list)),
+            "budget_alerts": clean_rich_tags("\n".join(alerts)),
+        })
 
-    # Untagged resources
-    untagged = scan_data.get("untagged_resources", {})
-    for service, regions in untagged.items():
-        count = sum(len(ids) for ids in regions.values())
-        if count > 0:
-            region_list = ", ".join(regions.keys())
-            table.add_row(f"Untagged {service}", str(count), region_list)
+        raw_audit_data.append({
+            "profile": profile,
+            "account_id": account_id,
+            "untagged_resources": untagged,
+            "stopped_instances": stopped,
+            "unused_volumes": unused_vols,
+            "unused_eips": unused_eips,
+            "budget_alerts": budget_data,
+        })
+
+        table.add_row(
+            f"[dark_magenta]{profile}[/]",
+            account_id,
+            "\n".join(anomalies),
+            "\n".join(stopped_list),
+            "\n".join(vols_list),
+            "\n".join(eips_list),
+            "\n".join(alerts),
+        )
 
     console.print(table)
+    console.print("[bold bright_cyan]Note: The dashboard only lists untagged EC2, RDS, Lambda, ELBv2.\n[/]")
+
+    # Export if requested
+    if report_name and report_types:
+        export_handler = ExportHandler(
+            output_dir=output_dir or os.getcwd(),
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            profile=profiles_to_use[0] if profiles_to_use else None,
+        )
+
+        for report_type in report_types:
+            if report_type == "csv":
+                csv_content = export_audit_report_to_csv(audit_data)
+                export_handler.save_csv(csv_content, f"{report_name}.csv")
+            elif report_type == "json":
+                json_content = export_audit_report_to_json(raw_audit_data)
+                export_handler.save_json(json_content, f"{report_name}.json")
+            elif report_type == "pdf":
+                pdf_bytes = export_audit_report_to_pdf(audit_data, report_name)
+                export_handler.save_pdf(pdf_bytes, f"{report_name}.pdf")
 
 
-def _run_history(
-    profiles: List[str],
-    handler: ExportHandler,
-    base_name: str,
-    timestamp: str,
+def _run_trend_analysis(
+    profiles_to_use: List[str],
+    combine: bool,
+    report_name: Optional[str],
     report_types: Optional[List[str]],
+    output_dir: Optional[str],
+    s3_bucket: Optional[str],
+    s3_prefix: Optional[str],
+    tags: Optional[Dict[str, str]],
 ) -> None:
-    """Run cost history analysis and generate visualizations."""
-    for profile in profiles:
-        console.print(f"\n[bold cyan]Analyzing account: {profile}[/]")
+    """Analyze and display cost trends."""
+    console.print("[bold bright_cyan]Analysing cost trends...[/]")
+    raw_trend_data = []
 
+    if combine:
+        account_profiles = defaultdict(list)
+        for profile in profiles_to_use:
+            try:
+                session = boto3.Session(profile_name=profile)
+                account_id = get_account_id(session)
+                if account_id:
+                    account_profiles[account_id].append(profile)
+            except Exception as e:
+                console.print(f"[red]Error checking account ID for profile {profile}: {str(e)}[/]")
+
+        for account_id, profile_list in account_profiles.items():
+            try:
+                primary_profile = profile_list[0]
+                session = boto3.Session(profile_name=primary_profile)
+                cost_data = get_trend(session, tags)
+                trend_data = cost_data.get("monthly_costs")
+
+                if not trend_data:
+                    console.print(f"[yellow]No trend data available for account {account_id}[/]")
+                    continue
+
+                profiles_str = ", ".join(profile_list)
+                console.print(f"\n[bright_yellow]Account: {account_id} (Profiles: {profiles_str})[/]")
+                raw_trend_data.append(cost_data)
+                create_trend_bars(trend_data)
+            except Exception as e:
+                console.print(f"[red]Error getting trend for account {account_id}: {str(e)}[/]")
+    else:
+        for profile in profiles_to_use:
+            try:
+                session = boto3.Session(profile_name=profile)
+                cost_data = get_trend(session, tags)
+                trend_data = cost_data.get("monthly_costs")
+                account_id = cost_data.get("account_id", "Unknown")
+
+                if not trend_data:
+                    console.print(f"[yellow]No trend data available for profile {profile}[/]")
+                    continue
+
+                console.print(f"\n[bright_yellow]Account: {account_id} (Profile: {profile})[/]")
+                raw_trend_data.append(cost_data)
+                create_trend_bars(trend_data)
+            except Exception as e:
+                console.print(f"[red]Error getting trend for profile {profile}: {str(e)}[/]")
+
+    # Export if requested
+    if raw_trend_data and report_name and report_types:
+        export_handler = ExportHandler(
+            output_dir=output_dir or os.getcwd(),
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            profile=profiles_to_use[0] if profiles_to_use else None,
+        )
+
+        if "json" in report_types:
+            json_content = export_trend_data_to_json(raw_trend_data, report_name)
+            export_handler.save_json(json_content, f"{report_name}_trend.json")
+
+
+def _get_display_table_period_info(
+    profiles_to_use: List[str], time_range: Optional[Union[int, str]]
+) -> Tuple[str, str, str, str]:
+    """Get period information for the display table."""
+    if profiles_to_use:
         try:
-            session = boto3.Session(profile_name=profile)
-            monthly_costs = get_trend(session)
+            sample_session = boto3.Session(profile_name=profiles_to_use[0])
+            sample_cost_data = get_cost_data(sample_session, time_range)
+            previous_period_name = sample_cost_data.get("previous_period_name", "Last Month Due")
+            current_period_name = sample_cost_data.get("current_period_name", "Current Month Cost")
+            previous_period_dates = f"{sample_cost_data['previous_period_start']} to {sample_cost_data['previous_period_end']}"
+            current_period_dates = f"{sample_cost_data['current_period_start']} to {sample_cost_data['current_period_end']}"
+            return (previous_period_name, current_period_name, previous_period_dates, current_period_dates)
+        except Exception:
+            pass
+    return "Last Month Due", "Current Month Cost", "N/A", "N/A"
 
-            if monthly_costs:
-                # Display history chart
-                panel = create_trend_bars(monthly_costs)
-                console.print(panel)
 
-                # Export if requested
-                if report_types and "json" in report_types:
-                    filename = f"{base_name}_{profile}_history_{timestamp}.json"
-                    json_content = export_trend_data_to_json(monthly_costs, profile)
-                    handler.save_json(json_content, filename)
-            else:
-                console.print("[yellow]No cost history available[/]")
+def create_display_table(
+    previous_period_dates: str,
+    current_period_dates: str,
+    previous_period_name: str = "Last Month Due",
+    current_period_name: str = "Current Month Cost",
+) -> Table:
+    """Create and configure the display table with dynamic column names."""
+    return Table(
+        Column("AWS Account Profile", justify="center", vertical="middle"),
+        Column(f"{previous_period_name}\n({previous_period_dates})", justify="center", vertical="middle"),
+        Column(f"{current_period_name}\n({current_period_dates})", justify="center", vertical="middle"),
+        Column("Previous Period Cost By Service", vertical="middle"),
+        Column("Current Period Cost By Service", vertical="middle"),
+        Column("Budget Status", vertical="middle"),
+        Column("EC2 Instance Summary", justify="center", vertical="middle"),
+        title="AWS CostLens Dashboard",
+        caption="AWS CostLens CLI",
+        box=box.ASCII_DOUBLE_HEAD,
+        show_lines=True,
+        style="bright_cyan",
+    )
 
-        except Exception as e:
-            console.print(f"[bold red]Error getting history for {profile}: {str(e)}[/]")
+
+def add_profile_to_table(table: Table, profile_data: ProfileData) -> None:
+    """Add profile data to the display table."""
+    if profile_data["success"]:
+        percentage_change = profile_data.get("percent_change_in_total_cost")
+        change_text = ""
+
+        if percentage_change is not None:
+            if percentage_change > 0:
+                change_text = f"\n\n[bright_red]⬆ {percentage_change:.2f}%"
+            elif percentage_change < 0:
+                change_text = f"\n\n[bright_green]⬇ {abs(percentage_change):.2f}%"
+            elif percentage_change == 0:
+                change_text = "\n\n[bright_yellow]➡ 0.00%[/]"
+
+        current_month_with_change = f"[bold red]${profile_data['current_month']:.2f}[/]{change_text}"
+
+        table.add_row(
+            f"[bright_magenta]Profile: {profile_data['profile']}\nAccount: {profile_data['account_id']}[/]",
+            f"[bold red]${profile_data['last_month']:.2f}[/]",
+            current_month_with_change,
+            "[bright_green]" + "\n".join(profile_data["previous_service_costs_formatted"]) + "[/]",
+            "[bright_green]" + "\n".join(profile_data["service_costs_formatted"]) + "[/]",
+            "[bright_yellow]" + "\n\n".join(profile_data["budget_info"]) + "[/]",
+            "\n".join(profile_data["ec2_summary_formatted"]),
+        )
+    else:
+        table.add_row(
+            f"[bright_magenta]{profile_data['profile']}[/]",
+            "[red]Error[/]",
+            "[red]Error[/]",
+            "[red]Error[/]",
+            f"[red]Failed to process profile: {profile_data['error']}[/]",
+            "[red]N/A[/]",
+            "[red]N/A[/]",
+        )
 
 
 def _run_cost_dashboard(
-    profiles: List[str],
-    regions: Optional[List[str]],
+    profiles_to_use: List[str],
+    user_regions: Optional[List[str]],
     combine: bool,
-    handler: ExportHandler,
-    base_name: str,
-    timestamp: str,
+    report_name: Optional[str],
     report_types: Optional[List[str]],
+    output_dir: Optional[str],
+    s3_bucket: Optional[str],
+    s3_prefix: Optional[str],
     time_range: Optional[Union[int, str]],
     tags: Optional[Dict[str, str]],
 ) -> None:
     """Run cost dashboard and generate reports."""
-    if combine and len(profiles) > 1:
-        # Process merged
-        console.print(f"[bold cyan]Merging data for {len(profiles)} profiles[/]")
-        profile_data = process_combined_profiles(profiles, regions, time_range, tags)
-        _display_profile_data(profile_data)
+    with Status("[bright_cyan]Initialising dashboard...", spinner="aesthetic", speed=0.4):
+        (
+            previous_period_name,
+            current_period_name,
+            previous_period_dates,
+            current_period_dates,
+        ) = _get_display_table_period_info(profiles_to_use, time_range)
 
-        if report_types:
-            _export_profile_data(
-                profile_data, handler, f"{base_name}_merged_{timestamp}", report_types
-            )
-    else:
-        # Process individually
-        for profile in profiles:
-            console.print(f"\n[bold cyan]Analyzing account: {profile}[/]")
-            profile_data = process_single_profile(profile, regions, time_range, tags)
+        table = create_display_table(
+            previous_period_dates,
+            current_period_dates,
+            previous_period_name,
+            current_period_name,
+        )
 
-            if profile_data["success"]:
-                _display_profile_data(profile_data)
+    export_data: List[ProfileData] = []
 
-                if report_types:
-                    _export_profile_data(
-                        profile_data,
-                        handler,
-                        f"{base_name}_{profile}_{timestamp}",
-                        report_types,
-                    )
+    if combine:
+        account_profiles = defaultdict(list)
+        for profile in profiles_to_use:
+            try:
+                session = boto3.Session(profile_name=profile)
+                current_account_id = get_account_id(session)
+                if current_account_id:
+                    account_profiles[current_account_id].append(profile)
+                else:
+                    console.log(f"[yellow]Could not determine account ID for profile {profile}[/]")
+            except Exception as e:
+                console.log(f"[bold red]Error checking account ID for profile {profile}: {str(e)}[/]")
+
+        for account_id_key, profile_list in track(
+            account_profiles.items(), description="[bright_cyan]Fetching cost data..."
+        ):
+            if len(profile_list) > 1:
+                profile_data = process_combined_profiles(
+                    account_id_key, profile_list, user_regions, time_range, tags
+                )
             else:
-                console.print(f"[bold red]Error: {profile_data.get('error')}[/]")
-
-
-def _display_profile_data(data: Dict) -> None:
-    """Display profile cost data in console."""
-    # Create summary panel
-    pct = data.get("percent_change_in_total_cost")
-    pct_color = "green" if pct and pct < 0 else "red" if pct and pct > 0 else "yellow"
-    pct_str = f"[{pct_color}]{pct:+.1f}%[/]" if pct is not None else "[dim]N/A[/]"
-
-    summary = f"""[bold]Account:[/] {data.get('account_id', 'N/A')}
-[bold]{data.get('current_period_name', 'Current')}:[/] [green]${data.get('current_month', 0):,.2f}[/]
-[bold]{data.get('previous_period_name', 'Previous')}:[/] ${data.get('last_month', 0):,.2f}
-[bold]Change:[/] {pct_str}"""
-
-    console.print(Panel(summary, title=f"💵 Spending Overview - {data.get('profile', 'Summary')}", border_style="green"))
-
-    # Services table
-    table = Table(title="Highest Cost Services", show_header=True)
-    table.add_column("Service", style="cyan")
-    table.add_column("Current", justify="right", style="green")
-    table.add_column("Previous", justify="right", style="dim")
-
-    current = data.get("service_costs", [])
-    previous = dict(data.get("previous_service_costs", []))
-
-    for svc, cost in current:
-        prev_cost = previous.get(svc, 0)
-        table.add_row(svc, f"${cost:,.2f}", f"${prev_cost:,.2f}")
+                profile_data = process_single_profile(
+                    profile_list[0], user_regions, time_range, tags
+                )
+            export_data.append(profile_data)
+            add_profile_to_table(table, profile_data)
+    else:
+        for profile in track(profiles_to_use, description="[bright_cyan]Fetching cost data..."):
+            profile_data = process_single_profile(profile, user_regions, time_range, tags)
+            export_data.append(profile_data)
+            add_profile_to_table(table, profile_data)
 
     console.print(table)
 
-    # Budgets
-    budgets = data.get("budget_info", [])
-    if budgets and budgets != ["No budgets configured"]:
-        console.print("\n[bold]Budgets:[/]")
-        for b in budgets:
-            console.print(f"  {b}")
+    # Export if requested
+    if report_name and report_types:
+        export_handler = ExportHandler(
+            output_dir=output_dir or os.getcwd(),
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            profile=profiles_to_use[0] if profiles_to_use else None,
+        )
 
-    # EC2 Summary
-    ec2 = data.get("ec2_summary_formatted", [])
-    if ec2:
-        console.print("\n[bold]EC2 Summary:[/]")
-        for item in ec2:
-            console.print(f"  {item}")
-
-
-def _export_profile_data(
-    data: Dict,
-    handler: ExportHandler,
-    filename_base: str,
-    report_types: List[str],
-) -> None:
-    """Export profile data to requested formats."""
-    current_period = data.get("current_period_name", "Current")
-    previous_period = data.get("previous_period_name", "Previous")
-
-    if "pdf" in report_types:
-        pdf_bytes = export_cost_dashboard_to_pdf(data, current_period, previous_period)
-        handler.save_pdf(pdf_bytes, f"{filename_base}.pdf")
-
-    if "csv" in report_types:
-        csv_content = export_to_csv(data, current_period, previous_period)
-        handler.save_csv(csv_content, f"{filename_base}.csv")
-
-    if "json" in report_types:
-        json_content = export_to_json(data, current_period, previous_period)
-        handler.save_json(json_content, f"{filename_base}.json")
+        for report_type in report_types:
+            if report_type == "csv":
+                csv_content = export_to_csv(export_data, report_name, previous_period_dates, current_period_dates)
+                export_handler.save_csv(csv_content, f"{report_name}.csv")
+            elif report_type == "json":
+                json_content = export_to_json(export_data, report_name)
+                export_handler.save_json(json_content, f"{report_name}.json")
+            elif report_type == "pdf":
+                pdf_bytes = export_cost_dashboard_to_pdf(
+                    export_data, report_name, previous_period_dates, current_period_dates
+                )
+                export_handler.save_pdf(pdf_bytes, f"{report_name}.pdf")

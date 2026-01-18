@@ -4,11 +4,9 @@ import argparse
 import sys
 from typing import Dict, List, Optional
 
-# Force UTF-8 encoding for Windows compatibility with Unicode characters
-if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Setup UTF-8 console for Windows
+from aws_costlens.console_setup import setup_console
+setup_console()
 
 from rich.console import Console
 

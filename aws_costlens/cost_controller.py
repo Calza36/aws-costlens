@@ -17,30 +17,61 @@ from aws_costlens.models import BudgetInfo, CostData, EC2Summary
 console = Console(force_terminal=True, legacy_windows=False)
 
 
-def get_trend(session: Session) -> Optional[List[Tuple[str, float]]]:
+def get_trend(session: Session, tags: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Get 6-month cost trend data from AWS Cost Explorer."""
+    from aws_costlens.aws_api import get_account_id
+    
     ce = session.client("ce", region_name="us-east-1")
+    account_id = get_account_id(session)
+    profile = session.profile_name
 
     today = datetime.today()
-    end = today.replace(day=1)
+    end = today
     start = (end - timedelta(days=180)).replace(day=1)
 
+    # Build filter if tags provided
+    filter_param = None
+    if tags:
+        tag_filters = []
+        for key, value in tags.items():
+            tag_filters.append({
+                "Tags": {
+                    "Key": key,
+                    "Values": [value],
+                    "MatchOptions": ["EQUALS"],
+                }
+            })
+        if len(tag_filters) == 1:
+            filter_param = tag_filters[0]
+        else:
+            filter_param = {"And": tag_filters}
+
     try:
-        response = ce.get_cost_and_usage(
-            TimePeriod={"Start": start.strftime("%Y-%m-%d"), "End": end.strftime("%Y-%m-%d")},
-            Granularity="MONTHLY",
-            Metrics=["UnblendedCost"],
-        )
+        kwargs: Dict[str, Any] = {
+            "TimePeriod": {"Start": start.strftime("%Y-%m-%d"), "End": end.strftime("%Y-%m-%d")},
+            "Granularity": "MONTHLY",
+            "Metrics": ["UnblendedCost"],
+        }
+        if filter_param:
+            kwargs["Filter"] = filter_param
+
+        response = ce.get_cost_and_usage(**kwargs)
         results = response.get("ResultsByTime", [])
         monthly_costs: List[Tuple[str, float]] = []
         for r in results:
             period_start = r["TimePeriod"]["Start"]
+            month = datetime.strptime(period_start, "%Y-%m-%d").strftime("%b %Y")
             amount = float(r["Total"]["UnblendedCost"]["Amount"])
-            monthly_costs.append((period_start[:7], amount))
-        return monthly_costs
+            monthly_costs.append((month, amount))
+        
+        return {
+            "monthly_costs": monthly_costs,
+            "account_id": account_id,
+            "profile": profile,
+        }
     except ClientError as e:
         console.print(f"[bold red]Error fetching trend data: {e}[/]")
-        return None
+        return {"monthly_costs": [], "account_id": account_id, "profile": profile}
 
 
 def get_cost_data(
@@ -188,71 +219,80 @@ def change_in_total_cost(current: float, previous: float) -> Optional[float]:
 
 
 def export_to_csv(
-    profile_data: Dict,
-    current_period: str,
-    previous_period: str,
+    export_data: List[Dict],
+    report_name: str,
+    previous_period_dates: str,
+    current_period_dates: str,
 ) -> str:
     """Export cost data to CSV format."""
     output = StringIO()
     writer = csv.writer(output)
 
-    writer.writerow(["AWS Cost Report"])
-    writer.writerow(["Profile", profile_data.get("profile", "N/A")])
-    writer.writerow(["Account ID", profile_data.get("account_id", "N/A")])
+    writer.writerow(["AWS CostLens Report"])
+    writer.writerow(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
     writer.writerow([])
 
-    writer.writerow(["Period", "Total Cost"])
-    writer.writerow([current_period, f"${profile_data.get('current_month', 0):,.2f}"])
-    writer.writerow([previous_period, f"${profile_data.get('last_month', 0):,.2f}"])
-    writer.writerow([])
+    for profile_data in export_data:
+        writer.writerow(["Profile", profile_data.get("profile", "N/A")])
+        writer.writerow(["Account ID", profile_data.get("account_id", "N/A")])
+        writer.writerow([])
 
-    writer.writerow([f"Top Services - {current_period}"])
-    writer.writerow(["Service", "Cost"])
-    for service, cost in profile_data.get("service_costs", []):
-        writer.writerow([service, f"${cost:,.2f}"])
-    writer.writerow([])
+        writer.writerow(["Period", "Dates", "Total Cost"])
+        writer.writerow(["Previous", previous_period_dates, f"${profile_data.get('last_month', 0):,.2f}"])
+        writer.writerow(["Current", current_period_dates, f"${profile_data.get('current_month', 0):,.2f}"])
+        if profile_data.get("percent_change_in_total_cost") is not None:
+            writer.writerow(["Change", "", f"{profile_data.get('percent_change_in_total_cost'):+.2f}%"])
+        writer.writerow([])
 
-    writer.writerow(["Budgets"])
-    for budget in profile_data.get("budget_info", []):
-        writer.writerow([budget])
-    writer.writerow([])
+        writer.writerow(["Current Period - Top Services"])
+        writer.writerow(["Service", "Cost"])
+        for line in profile_data.get("service_costs_formatted", []):
+            writer.writerow([line])
+        writer.writerow([])
 
-    writer.writerow(["EC2 Summary"])
-    for item in profile_data.get("ec2_summary_formatted", []):
-        writer.writerow([item])
+        writer.writerow(["Previous Period - Top Services"])
+        for line in profile_data.get("previous_service_costs_formatted", []):
+            writer.writerow([line])
+        writer.writerow([])
+
+        writer.writerow(["Budgets"])
+        for budget in profile_data.get("budget_info", []):
+            writer.writerow([budget])
+        writer.writerow([])
+
+        writer.writerow(["EC2 Summary"])
+        for item in profile_data.get("ec2_summary_formatted", []):
+            writer.writerow([item])
+        writer.writerow([])
+        writer.writerow(["---"])
+        writer.writerow([])
 
     return output.getvalue()
 
 
 def export_to_json(
-    profile_data: Dict,
-    current_period: str,
-    previous_period: str,
+    export_data: List[Dict],
+    report_name: str,
 ) -> str:
     """Export cost data to JSON format."""
-    data = {
-        "profile": profile_data.get("profile", "N/A"),
-        "account_id": profile_data.get("account_id", "N/A"),
-        "periods": {
-            "current": {
-                "name": current_period,
-                "total_cost": profile_data.get("current_month", 0),
-                "top_services": [
-                    {"service": svc, "cost": cost}
-                    for svc, cost in profile_data.get("service_costs", [])
-                ],
-            },
-            "previous": {
-                "name": previous_period,
-                "total_cost": profile_data.get("last_month", 0),
-                "top_services": [
-                    {"service": svc, "cost": cost}
-                    for svc, cost in profile_data.get("previous_service_costs", [])
-                ],
-            },
-        },
-        "percent_change": profile_data.get("percent_change_in_total_cost"),
-        "budgets": profile_data.get("budget_info", []),
-        "ec2_summary": profile_data.get("ec2_summary", {}),
+    output = {
+        "report_name": report_name,
+        "generated": datetime.now().isoformat(),
+        "profiles": []
     }
-    return json.dumps(data, indent=2)
+    
+    for profile_data in export_data:
+        profile_output = {
+            "profile": profile_data.get("profile", "N/A"),
+            "account_id": profile_data.get("account_id", "N/A"),
+            "current_month_cost": profile_data.get("current_month", 0),
+            "previous_month_cost": profile_data.get("last_month", 0),
+            "percent_change": profile_data.get("percent_change_in_total_cost"),
+            "current_services": profile_data.get("service_costs_formatted", []),
+            "previous_services": profile_data.get("previous_service_costs_formatted", []),
+            "budgets": profile_data.get("budget_info", []),
+            "ec2_summary": profile_data.get("ec2_summary_formatted", []),
+        }
+        output["profiles"].append(profile_output)
+    
+    return json.dumps(output, indent=2)

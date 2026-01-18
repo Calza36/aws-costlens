@@ -1,6 +1,6 @@
 [project]
 name = "devops-aws-costlens"
-version = "1.0.2"
+version = "1.1.0"
 description = "AWS Cost Intelligence Tool - Terminal-based cost and resource dashboard."
 readme = "README.md"
 requires-python = ">=3.8"
