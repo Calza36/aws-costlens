@@ -1,0 +1,61 @@
+# AWS CostLens - Configuration Example
+# Copy this file to config.yaml or costlens.yaml and customize
+
+# =============================================================================
+# AWS Profiles
+# =============================================================================
+# List of AWS CLI profiles to analyze
+# These should match profiles configured in ~/.aws/credentials
+profiles:
+  - default
+  - dev
+  - staging
+  - prod
+
+# =============================================================================
+# Regions
+# =============================================================================
+# AWS regions to check for resources (used in scan command)
+# If not specified, common regions will be used
+regions:
+  - us-east-1
+  - us-west-2
+  - eu-west-1
+
+# =============================================================================
+# Options
+# =============================================================================
+# Process all available AWS profiles (overrides 'profiles' list)
+all_profiles: false
+
+# Merge results from multiple profiles into a single report
+merge: false
+
+# =============================================================================
+# Export Settings
+# =============================================================================
+# Base name for generated report files
+name: costlens_report
+
+# Export formats: pdf, csv, json
+format:
+  - pdf
+  - csv
+
+# Output directory for reports (default: current directory)
+dir: ./reports
+
+# =============================================================================
+# S3 Upload (Optional)
+# =============================================================================
+# Automatically upload reports to S3
+# bucket: my-reports-bucket
+# s3_path: costlens/monthly
+
+# =============================================================================
+# Tag Filters (Optional)
+# =============================================================================
+# Filter costs by AWS resource tags
+# tags:
+#   Environment: production
+#   Project: webapp

@@ -1,0 +1,76 @@
+[project]
+name = "devops-aws-costlens"
+version = "1.0.0"
+description = "AWS Cost Intelligence Tool - Terminal-based cost and resource dashboard."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "Ernesto Calzadilla Martínez"}]
+dependencies = [
+    "boto3>=1.37.28",
+    "rich>=14.0.0",
+    "reportlab>=3.6.1",
+    "pyyaml>=6.0.2",
+]
+keywords = ["aws", "finops", "cost", "dashboard", "cli", "cloud", "costlens"]
+
+[project.urls]
+"Homepage" = "https://github.com/your-org/aws-costlens"
+"Source" = "https://github.com/your-org/aws-costlens"
+
+[project.scripts]
+aws-costlens = "aws_costlens.cli_commands:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "hatch>=1.9.0",
+    "mypy>=1.5.1",
+    "types-boto3",
+    "types-reportlab",
+    "types-PyYAML",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.hatch.build.targets.wheel]
+packages = ["aws_costlens"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build]
+packages = ["aws_costlens"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "black>=23.12.1",
+    "isort>=5.13.2",
+    "mypy>=1.5.1",
+    "types-boto3",
+    "types-reportlab",
+    "types-PyYAML",
+]
+
+[tool.hatch.envs.default.scripts]
+fmt = [
+    "isort aws_costlens",
+    "black aws_costlens",
+]
+lint = [
+    "black --check aws_costlens",
+    "isort --check aws_costlens",
+    "mypy aws_costlens",
+]
