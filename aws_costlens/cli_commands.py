@@ -54,20 +54,55 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  aws-costlens cost                              # Cost dashboard for default profile
+  aws-costlens --profiles mfa                    # Cost dashboard (default command)
   aws-costlens cost --profiles dev prod          # Multiple profiles
-  aws-costlens cost --all-profiles               # All configured profiles
-  aws-costlens cost --all-profiles --merge       # Merge profiles from same account
+  aws-costlens --all-profiles                    # All configured profiles
+  aws-costlens --all-profiles --merge            # Merge profiles from same account
   aws-costlens history --profiles prod           # 6-month cost history
   aws-costlens scan --profiles prod              # Resource scan
   aws-costlens export --all-profiles --format pdf  # Export report to PDF
 """,
     )
 
+    # Add global arguments (work without subcommand for quick dashboard access)
+    parser.add_argument(
+        "--profiles", "-p",
+        nargs="+",
+        help="AWS CLI profile names to use",
+    )
+    parser.add_argument(
+        "--regions", "-r",
+        nargs="+",
+        help="AWS regions to check (default: common regions)",
+    )
+    parser.add_argument(
+        "--all-profiles", "-a",
+        action="store_true",
+        help="Process all available AWS profiles",
+    )
+    parser.add_argument(
+        "--config", "-c",
+        help="Path to YAML config file",
+    )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Merge results from multiple profiles",
+    )
+    parser.add_argument(
+        "--time-range", "-t",
+        help="Time range: number of days (e.g., 30) or date range (YYYY-MM-DD:YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        help="Filter by tag (key=value), can be used multiple times",
+    )
+
     # Subcommands
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Common arguments for all commands
+    # Common arguments for subcommands
     def add_common_args(subparser: argparse.ArgumentParser) -> None:
         subparser.add_argument(
             "--profiles", "-p",
@@ -110,10 +145,38 @@ Examples:
     # History command (formerly trend)
     history_parser = subparsers.add_parser("history", help="Display 6-month cost history")
     add_common_args(history_parser)
+    history_parser.add_argument(
+        "--name", "-n",
+        help="Base name for report files",
+    )
+    history_parser.add_argument(
+        "--format", "-f",
+        nargs="+",
+        choices=["json"],
+        help="Export format(s): json",
+    )
+    history_parser.add_argument(
+        "--dir", "-d",
+        help="Output directory for reports",
+    )
 
     # Scan command (formerly audit)
     scan_parser = subparsers.add_parser("scan", help="Run resource scan")
     add_common_args(scan_parser)
+    scan_parser.add_argument(
+        "--name", "-n",
+        help="Base name for report files",
+    )
+    scan_parser.add_argument(
+        "--format", "-f",
+        nargs="+",
+        choices=["pdf", "csv", "json"],
+        help="Export format(s): pdf, csv, json",
+    )
+    scan_parser.add_argument(
+        "--dir", "-d",
+        help="Output directory for reports",
+    )
 
     # Export command (formerly report)
     export_parser = subparsers.add_parser("export", help="Generate and export reports")
@@ -179,10 +242,19 @@ Examples:
     # Show banner
     welcome_banner()
 
-    # No command provided
+    # No command provided - default to 'cost' if profiles given, else show help
     if not args.command:
-        parser.print_help()
-        sys.exit(0)
+        if args.profiles or args.all_profiles:
+            # Default behavior: run cost dashboard
+            args.command = "cost"
+            # Set time_range and tag as None for default cost command
+            if not hasattr(args, "time_range"):
+                args.time_range = None
+            if not hasattr(args, "tag"):
+                args.tag = None
+        else:
+            parser.print_help()
+            sys.exit(0)
 
     # Load config file if provided
     config = {}
@@ -210,6 +282,24 @@ Examples:
     if hasattr(args, "tag"):
         tags = parse_tags(args.tag)
 
+    # Validate export options for scan/history
+    if args.command in ("scan", "history"):
+        wants_export = any(
+            getattr(args, name, None)
+            for name in ("format", "name", "dir")
+        )
+        if wants_export:
+            if not getattr(args, "name", None):
+                console.print("[red]Error: --name is required when exporting reports[/]")
+                sys.exit(2)
+            if not getattr(args, "format", None):
+                console.print("[red]Error: --format is required when exporting reports[/]")
+                sys.exit(2)
+        else:
+            args.name = None
+            args.format = None
+            args.dir = None
+
     # Execute command
     if args.command == "cost":
         run_dashboard(
@@ -227,6 +317,9 @@ Examples:
             regions=regions,
             all_profiles=all_profiles,
             trend=True,
+            report_name=args.name,
+            report_types=args.format,
+            output_dir=args.dir,
         )
 
     elif args.command == "scan":
@@ -235,6 +328,9 @@ Examples:
             regions=regions,
             all_profiles=all_profiles,
             audit=True,
+            report_name=args.name,
+            report_types=args.format,
+            output_dir=args.dir,
         )
 
     elif args.command == "export":

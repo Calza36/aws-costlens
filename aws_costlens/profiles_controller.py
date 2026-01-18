@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Union
 import boto3
 from rich.console import Console
 
-from aws_costlens.aws_api import ec2_summary, get_account_id
+from aws_costlens.aws_api import ec2_summary, get_accessible_regions, get_account_id
 from aws_costlens.cost_controller import (
     change_in_total_cost,
     format_budget_info,
@@ -44,16 +44,17 @@ def process_single_profile(
         # Get cost data
         cost_data = get_cost_data(session, time_range=time_range, tags=tags)
 
-        # Process service costs
-        current_services = process_service_costs(
+        # Process service costs (returns formatted list and data tuples)
+        current_formatted, current_data = process_service_costs(
             cost_data["current_month_cost_by_service"]
         )
-        previous_services = process_service_costs(
+        previous_formatted, previous_data = process_service_costs(
             cost_data["previous_month_cost_by_service"]
         )
 
-        # Get EC2 summary
-        ec2_data = ec2_summary(session, regions)
+        # Get EC2 summary - use ALL accessible regions if not specified
+        profile_regions = regions if regions else get_accessible_regions(session)
+        ec2_data = ec2_summary(session, profile_regions)
 
         # Calculate percent change
         pct_change = change_in_total_cost(
@@ -65,14 +66,10 @@ def process_single_profile(
             "account_id": account_id,
             "last_month": cost_data["last_month"],
             "current_month": cost_data["current_month"],
-            "service_costs": current_services,
-            "service_costs_formatted": [
-                f"{svc}: ${cost:,.2f}" for svc, cost in current_services
-            ],
-            "previous_service_costs": previous_services,
-            "previous_service_costs_formatted": [
-                f"{svc}: ${cost:,.2f}" for svc, cost in previous_services
-            ],
+            "service_costs": current_data,
+            "service_costs_formatted": current_formatted,
+            "previous_service_costs": previous_data,
+            "previous_service_costs_formatted": previous_formatted,
             "budget_info": format_budget_info(cost_data["budgets"]),
             "ec2_summary": dict(ec2_data),
             "ec2_summary_formatted": format_ec2_summary(ec2_data),
@@ -180,18 +177,22 @@ def process_combined_profiles(
             combined["current_period_name"] = data["current_period_name"]
             combined["previous_period_name"] = data["previous_period_name"]
 
-    # Sort and format merged service costs
-    sorted_current = sorted(service_totals.items(), key=lambda x: x[1], reverse=True)[:5]
-    sorted_previous = sorted(prev_service_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+    # Sort and format ALL merged service costs (no limit)
+    sorted_current = sorted(service_totals.items(), key=lambda x: x[1], reverse=True)
+    sorted_previous = sorted(prev_service_totals.items(), key=lambda x: x[1], reverse=True)
+    
+    # Filter out very small costs
+    sorted_current = [(s, c) for s, c in sorted_current if c > 0.001]
+    sorted_previous = [(s, c) for s, c in sorted_previous if c > 0.001]
 
     combined["service_costs"] = sorted_current
     combined["service_costs_formatted"] = [
         f"{svc}: ${cost:,.2f}" for svc, cost in sorted_current
-    ]
+    ] or ["No costs associated with this account"]
     combined["previous_service_costs"] = sorted_previous
     combined["previous_service_costs_formatted"] = [
         f"{svc}: ${cost:,.2f}" for svc, cost in sorted_previous
-    ]
+    ] or ["No costs associated with this account"]
 
     combined["account_id"] = ", ".join(sorted(account_ids))
     combined["budget_info"] = all_budgets if all_budgets else ["No budgets configured"]

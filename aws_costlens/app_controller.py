@@ -153,7 +153,8 @@ def _run_audit_report(
 ) -> None:
     """Generate and export a resource scan report."""
     console.print("[bold bright_green]⚡ Scanning resources...[/]")
-    console.print("[dim]Checking: EC2, RDS, Lambda, ELBv2[/]\n")
+    console.print("[dim]Untagged check: EC2, RDS, Lambda, ELBv2[/]")
+    console.print("[dim]Also scanning: Stopped instances, Unused volumes, Unused EIPs, Budget alerts (all resources)[/]\n")
     
     table = Table(
         Column("Profile", justify="center"),
@@ -256,7 +257,7 @@ def _run_audit_report(
 
         for report_type in report_types:
             if report_type == "csv":
-                csv_content = export_audit_report_to_csv(audit_data)
+                csv_content = export_audit_report_to_csv(raw_audit_data)
                 export_handler.save_csv(csv_content, f"{report_name}.csv")
             elif report_type == "json":
                 json_content = export_audit_report_to_json(raw_audit_data)

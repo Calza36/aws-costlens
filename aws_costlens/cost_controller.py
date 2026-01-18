@@ -184,10 +184,25 @@ def get_cost_data(
     }
 
 
-def process_service_costs(services: List[Dict], top_n: int = 5) -> List[Tuple[str, float]]:
-    """Process and sort service costs, returning top N."""
+def process_service_costs(services: List[Dict]) -> Tuple[List[str], List[Tuple[str, float]]]:
+    """Process and format ALL service costs sorted by amount."""
+    service_costs_formatted: List[str] = []
+    service_cost_data: List[Tuple[str, float]] = []
+    
+    # Sort by cost descending
     sorted_services = sorted(services, key=lambda x: x["cost"], reverse=True)
-    return [(s["service"], s["cost"]) for s in sorted_services[:top_n]]
+    
+    for svc in sorted_services:
+        cost = svc["cost"]
+        name = svc["service"]
+        if cost > 0.001:  # Only show services with meaningful cost
+            service_cost_data.append((name, cost))
+            service_costs_formatted.append(f"{name}: ${cost:,.2f}")
+    
+    if not service_cost_data:
+        service_costs_formatted.append("No costs associated with this account")
+    
+    return service_costs_formatted, service_cost_data
 
 
 def format_budget_info(budgets: List[BudgetInfo]) -> List[str]:
@@ -232,39 +247,63 @@ def export_to_csv(
     writer.writerow(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
     writer.writerow([])
 
+    writer.writerow(["Profile", "Account ID", "Section", "Item", "Value"])
+
     for profile_data in export_data:
-        writer.writerow(["Profile", profile_data.get("profile", "N/A")])
-        writer.writerow(["Account ID", profile_data.get("account_id", "N/A")])
-        writer.writerow([])
+        profile = profile_data.get("profile", "N/A")
+        account_id = profile_data.get("account_id", "N/A")
 
-        writer.writerow(["Period", "Dates", "Total Cost"])
-        writer.writerow(["Previous", previous_period_dates, f"${profile_data.get('last_month', 0):,.2f}"])
-        writer.writerow(["Current", current_period_dates, f"${profile_data.get('current_month', 0):,.2f}"])
-        if profile_data.get("percent_change_in_total_cost") is not None:
-            writer.writerow(["Change", "", f"{profile_data.get('percent_change_in_total_cost'):+.2f}%"])
-        writer.writerow([])
+        # Summary section
+        writer.writerow([
+            profile,
+            account_id,
+            "Summary",
+            f"Previous ({previous_period_dates})",
+            f"${profile_data.get('last_month', 0):,.2f}",
+        ])
+        writer.writerow([
+            profile,
+            account_id,
+            "Summary",
+            f"Current ({current_period_dates})",
+            f"${profile_data.get('current_month', 0):,.2f}",
+        ])
+        pct = profile_data.get("percent_change_in_total_cost")
+        if pct is not None:
+            writer.writerow([profile, account_id, "Summary", "Change", f"{pct:+.2f}%"])
 
-        writer.writerow(["Current Period - Top Services"])
-        writer.writerow(["Service", "Cost"])
-        for line in profile_data.get("service_costs_formatted", []):
-            writer.writerow([line])
-        writer.writerow([])
+        # Previous period services
+        prev_services = profile_data.get("previous_service_costs", [])
+        if prev_services:
+            for service, cost in prev_services:
+                writer.writerow([profile, account_id, "Previous Service Costs", service, f"${cost:,.2f}"])
+        else:
+            writer.writerow([profile, account_id, "Previous Service Costs", "None", ""])
 
-        writer.writerow(["Previous Period - Top Services"])
-        for line in profile_data.get("previous_service_costs_formatted", []):
-            writer.writerow([line])
-        writer.writerow([])
+        # Current period services
+        curr_services = profile_data.get("service_costs", [])
+        if curr_services:
+            for service, cost in curr_services:
+                writer.writerow([profile, account_id, "Current Service Costs", service, f"${cost:,.2f}"])
+        else:
+            writer.writerow([profile, account_id, "Current Service Costs", "None", ""])
 
-        writer.writerow(["Budgets"])
-        for budget in profile_data.get("budget_info", []):
-            writer.writerow([budget])
-        writer.writerow([])
+        # Budgets
+        budgets = profile_data.get("budget_info", [])
+        if budgets:
+            for budget_line in budgets:
+                writer.writerow([profile, account_id, "Budgets", "", budget_line])
+        else:
+            writer.writerow([profile, account_id, "Budgets", "None", ""])
 
-        writer.writerow(["EC2 Summary"])
-        for item in profile_data.get("ec2_summary_formatted", []):
-            writer.writerow([item])
-        writer.writerow([])
-        writer.writerow(["---"])
+        # EC2 summary
+        ec2_summary = profile_data.get("ec2_summary", {})
+        if ec2_summary:
+            for state in sorted(ec2_summary.keys()):
+                writer.writerow([profile, account_id, "EC2 Summary", state, str(ec2_summary[state])])
+        else:
+            writer.writerow([profile, account_id, "EC2 Summary", "None", ""])
+
         writer.writerow([])
 
     return output.getvalue()

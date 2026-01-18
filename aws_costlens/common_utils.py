@@ -254,24 +254,72 @@ def export_audit_report_to_pdf(
 
 
 def export_audit_report_to_csv(audit_data: List[Dict], output_path: Optional[str] = None) -> str:
-    """Export scan report to CSV format."""
+    """Export scan report to CSV format (one item per row)."""
     import csv
     from io import StringIO
 
     output = StringIO()
     writer = csv.writer(output)
 
-    writer.writerow(["Profile", "Account ID", "Category", "Details"])
+    writer.writerow(["Profile", "Account ID", "Category", "Region", "Item", "Details"])
 
     for data in audit_data:
         profile = data.get("profile", "Unknown")
         account_id = data.get("account_id", "Unknown")
-        
-        writer.writerow([profile, account_id, "Stopped EC2", data.get("stopped_instances", "None")])
-        writer.writerow([profile, account_id, "Unused Volumes", data.get("unused_volumes", "None")])
-        writer.writerow([profile, account_id, "Unused EIPs", data.get("unused_eips", "None")])
-        writer.writerow([profile, account_id, "Untagged Resources", data.get("untagged_resources", "None")])
-        writer.writerow([profile, account_id, "Budget Alerts", data.get("budget_alerts", "None")])
+
+        # Stopped EC2 instances
+        stopped = data.get("stopped_instances") or {}
+        if stopped:
+            for region, ids in stopped.items():
+                for instance_id in ids:
+                    writer.writerow([profile, account_id, "Stopped EC2", region, instance_id, ""])
+        else:
+            writer.writerow([profile, account_id, "Stopped EC2", "", "None", ""])
+
+        # Unused volumes
+        volumes = data.get("unused_volumes") or {}
+        if volumes:
+            for region, ids in volumes.items():
+                for volume_id in ids:
+                    writer.writerow([profile, account_id, "Unused Volume", region, volume_id, ""])
+        else:
+            writer.writerow([profile, account_id, "Unused Volume", "", "None", ""])
+
+        # Unused EIPs
+        eips = data.get("unused_eips") or {}
+        if eips:
+            for region, ips in eips.items():
+                for ip in ips:
+                    writer.writerow([profile, account_id, "Unused EIP", region, ip, ""])
+        else:
+            writer.writerow([profile, account_id, "Unused EIP", "", "None", ""])
+
+        # Untagged resources
+        untagged = data.get("untagged_resources") or {}
+        if untagged:
+            for service, region_map in untagged.items():
+                if region_map:
+                    for region, ids in region_map.items():
+                        for resource_id in ids:
+                            writer.writerow(
+                                [profile, account_id, f"Untagged {service}", region, resource_id, ""]
+                            )
+        else:
+            writer.writerow([profile, account_id, "Untagged Resources", "", "None", ""])
+
+        # Budget alerts (only exceeded budgets)
+        budgets = data.get("budget_alerts") or []
+        alerts = [
+            b for b in budgets
+            if b.get("actual", 0) > b.get("limit", 0)
+        ]
+        if alerts:
+            for b in alerts:
+                details = f"${b['actual']:.2f} > ${b['limit']:.2f}"
+                writer.writerow([profile, account_id, "Budget Alert", "", b.get("name", "Unknown"), details])
+        else:
+            writer.writerow([profile, account_id, "Budget Alerts", "", "No budgets exceeded", ""])
+
         writer.writerow([])
 
     csv_content = output.getvalue()
