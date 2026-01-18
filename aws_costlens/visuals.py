@@ -14,7 +14,8 @@ def create_trend_bars(monthly_costs: List[Tuple[str, float]], max_width: int = 4
         monthly_costs: List of (month, cost) tuples
         max_width: Maximum width of bars
     """
-    console = Console()
+    # Force UTF-8 and modern Windows terminal mode for Unicode support
+    console = Console(force_terminal=True, legacy_windows=False)
 
     if not monthly_costs:
         return Panel("[yellow]No cost history available[/]", title="📈 Cost History")

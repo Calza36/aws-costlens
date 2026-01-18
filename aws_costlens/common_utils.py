@@ -23,7 +23,8 @@ from aws_costlens.pdf_renderer import (
     split_to_items,
 )
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def load_config_file(config_path: str) -> Dict[str, Any]:

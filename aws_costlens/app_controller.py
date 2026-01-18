@@ -29,7 +29,8 @@ from aws_costlens.common_utils import (
 from aws_costlens.profiles_controller import process_combined_profiles, process_single_profile
 from aws_costlens.visuals import create_trend_bars
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def run_dashboard(

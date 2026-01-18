@@ -10,7 +10,8 @@ from rich.console import Console
 
 from aws_costlens.models import BudgetInfo, EC2Summary, RegionName
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def get_aws_profiles() -> List[str]:

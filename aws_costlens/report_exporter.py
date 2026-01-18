@@ -6,7 +6,8 @@ from typing import Optional
 
 from rich.console import Console
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def upload_to_s3(

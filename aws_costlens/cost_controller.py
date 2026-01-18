@@ -13,7 +13,8 @@ from rich.console import Console
 from aws_costlens.aws_api import get_budgets
 from aws_costlens.models import BudgetInfo, CostData, EC2Summary
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def get_trend(session: Session) -> Optional[List[Tuple[str, float]]]:

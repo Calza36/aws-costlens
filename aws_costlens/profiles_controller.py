@@ -15,7 +15,8 @@ from aws_costlens.cost_controller import (
 )
 from aws_costlens.models import ProfileData
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def process_single_profile(

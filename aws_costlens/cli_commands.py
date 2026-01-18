@@ -4,13 +4,20 @@ import argparse
 import sys
 from typing import Dict, List, Optional
 
+# Force UTF-8 encoding for Windows compatibility with Unicode characters
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 from rich.console import Console
 
 from aws_costlens import __version__
 from aws_costlens.app_controller import run_dashboard
 from aws_costlens.common_utils import load_config_file
 
-console = Console()
+# Force UTF-8 and modern Windows terminal mode for Unicode support
+console = Console(force_terminal=True, legacy_windows=False)
 
 
 def welcome_banner() -> None:
