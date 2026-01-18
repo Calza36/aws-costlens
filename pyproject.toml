@@ -15,8 +15,8 @@ dependencies = [
 keywords = ["aws", "finops", "cost", "dashboard", "cli", "cloud", "costlens"]
 
 [project.urls]
-"Homepage" = "https://github.com/your-org/aws-costlens"
-"Source" = "https://github.com/your-org/aws-costlens"
+"Homepage" = "https://github.com/Calza36/aws-costlens"
+"Source" = "https://github.com/Calza36/aws-costlens"
 
 [project.scripts]
 aws-costlens = "aws_costlens.cli_commands:main"

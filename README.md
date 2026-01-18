@@ -46,7 +46,7 @@ If you want to install from source or contribute:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/aws-costlens.git
+git clone https://github.com/Calza36/aws-costlens.git
 cd aws-costlens
 
 # Install in development mode
