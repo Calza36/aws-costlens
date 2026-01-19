@@ -10,7 +10,7 @@
   <a href="https://pypi.org/project/devops-aws-costlens/"><img src="https://img.shields.io/pypi/v/devops-aws-costlens?color=blue&label=PyPI" alt="PyPI version"></a>
   <img src="https://img.shields.io/badge/python-3.8%2B-blue" alt="Python 3.8+">
   <a href="https://github.com/Calza36/aws-costlens/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT"></a>
-  <a href="https://github.com/Calza36/aws-costlens/issues"><img src="https://img.shields.io/github/issues/Calza36/aws-costlens" alt="Issues"></a>
+  <a href="https://pepy.tech/projects/devops-aws-costlens"><img src="https://static.pepy.tech/personalized-badge/devops-aws-costlens?period=total&units=international_system&left_color=black&right_color=green&left_text=downloads" alt="Downloads"></a>
 </p>
 
 <p align="center">
@@ -331,6 +331,8 @@ pip install -e .
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE) file.
+
+*Inspired by aws-finops-dashboard*
 
 ---
 
