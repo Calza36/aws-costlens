@@ -94,16 +94,35 @@ def get_cost_data(
 
     # Handle custom time range
     if time_range:
-        if isinstance(time_range, int):
+        # Check for "last-month" keyword (case-insensitive)
+        if isinstance(time_range, str) and time_range.lower() == "last-month":
+            # Last month (full calendar month) vs month before last (full calendar month)
+            # Current period = previous calendar month
+            current_end = today.replace(day=1)  # First day of current month
+            current_start = (current_end - timedelta(days=1)).replace(day=1)  # First day of last month
+            
+            # Previous period = month before last
+            previous_end = current_start  # First day of last month
+            previous_start = (previous_end - timedelta(days=1)).replace(day=1)  # First day of month before last
+            
+            current_period_name = f"{current_start.strftime('%B %Y')} (last month)"
+            previous_period_name = f"{previous_start.strftime('%B %Y')} (prior month)"
+        
+        elif isinstance(time_range, int):
+            # N days: last N days vs previous N days
             current_start = today - timedelta(days=time_range)
             current_end = today
             previous_start = current_start - timedelta(days=time_range)
             previous_end = current_start
             current_period_name = f"Last {time_range} days"
             previous_period_name = f"Previous {time_range} days"
+        
         else:
             # Parse custom date range like "2024-01-01:2024-01-31"
             parts = time_range.split(":")
+            if len(parts) != 2:
+                console.print(f"[bold red]Error: Invalid date range format '{time_range}'. Use YYYY-MM-DD:YYYY-MM-DD[/]")
+                parts = [today.replace(day=1).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")]
             current_start = datetime.strptime(parts[0], "%Y-%m-%d")
             current_end = datetime.strptime(parts[1], "%Y-%m-%d")
             delta = (current_end - current_start).days
@@ -112,13 +131,18 @@ def get_cost_data(
             current_period_name = f"{parts[0]} to {parts[1]}"
             previous_period_name = f"{previous_start.strftime('%Y-%m-%d')} to {previous_end.strftime('%Y-%m-%d')}"
     else:
-        # Default: current month vs last month
+        # Default: current month (MTD) vs last month (full)
         current_start = today.replace(day=1)
         current_end = today
+        
+        # Edge case: if today is the 1st, add 1 day to avoid empty range
+        if current_start == current_end:
+            current_end = current_end + timedelta(days=1)
+        
         previous_start = (current_start - timedelta(days=1)).replace(day=1)
-        previous_end = current_start - timedelta(days=1)
-        current_period_name = today.strftime("%B %Y")
-        previous_period_name = previous_start.strftime("%B %Y")
+        previous_end = current_start
+        current_period_name = f"{today.strftime('%B %Y')} (MTD)"
+        previous_period_name = f"{previous_start.strftime('%B %Y')} (full month)"
 
     # Build filter if tags provided
     filter_expr = None

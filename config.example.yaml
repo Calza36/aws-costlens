@@ -34,15 +34,18 @@ merge: false
 # =============================================================================
 # Export Settings
 # =============================================================================
-# Base name for generated report files
+# Base name for generated report files (used with export command)
+# Example: costlens_report -> costlens_report.pdf, costlens_report.csv, etc.
 name: costlens_report
 
 # Export formats: pdf, csv, json
+# Can specify multiple formats: [pdf, csv, json]
 format:
   - pdf
   - csv
 
 # Output directory for reports (default: current directory)
+# Relative or absolute path
 dir: ./reports
 
 # =============================================================================
@@ -59,3 +62,14 @@ dir: ./reports
 # tags:
 #   Environment: production
 #   Project: webapp
+
+# =============================================================================
+# Time Range (Optional)
+# =============================================================================
+# Custom time range for cost analysis
+# Can be a number (days) or date range (YYYY-MM-DD:YYYY-MM-DD)
+# Examples:
+#   time_range: 30          # Last 30 days
+#   time_range: 90           # Last 90 days
+#   time_range: 2025-01-01:2025-01-31  # Specific date range
+# time_range: 30

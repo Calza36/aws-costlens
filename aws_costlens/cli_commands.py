@@ -58,6 +58,8 @@ Examples:
   aws-costlens cost --profiles dev prod          # Multiple profiles
   aws-costlens --all-profiles                    # All configured profiles
   aws-costlens --all-profiles --merge            # Merge profiles from same account
+  aws-costlens --profiles mfa --time-range last-month  # Full month vs prior month
+  aws-costlens --profiles mfa --time-range 30    # Last 30 days vs previous 30 days
   aws-costlens history --profiles prod           # 6-month cost history
   aws-costlens scan --profiles prod              # Resource scan
   aws-costlens export --all-profiles --format pdf  # Export report to PDF
@@ -91,7 +93,7 @@ Examples:
     )
     parser.add_argument(
         "--time-range", "-t",
-        help="Time range: number of days (e.g., 30) or date range (YYYY-MM-DD:YYYY-MM-DD)",
+        help="Time range: number of days (e.g., 30), 'last-month' for full calendar month comparison, or date range (YYYY-MM-DD:YYYY-MM-DD)",
     )
     parser.add_argument(
         "--tag",
@@ -134,7 +136,7 @@ Examples:
     )
     cost_parser.add_argument(
         "--time-range", "-t",
-        help="Time range: number of days (e.g., 30) or date range (YYYY-MM-DD:YYYY-MM-DD)",
+        help="Time range: number of days (e.g., 30), 'last-month' for full calendar month comparison, or date range (YYYY-MM-DD:YYYY-MM-DD)",
     )
     cost_parser.add_argument(
         "--tag",
@@ -188,7 +190,7 @@ Examples:
     )
     export_parser.add_argument(
         "--time-range", "-t",
-        help="Time range for cost data",
+        help="Time range: number of days (e.g., 30), 'last-month', or date range (YYYY-MM-DD:YYYY-MM-DD)",
     )
     export_parser.add_argument(
         "--tag",
