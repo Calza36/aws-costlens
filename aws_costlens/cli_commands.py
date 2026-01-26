@@ -173,7 +173,7 @@ Examples:
         "--format", "-f",
         nargs="+",
         choices=["pdf", "csv", "json"],
-        help="Export format(s): pdf, csv, json",
+        help="Export format(s): pdf, csv, json, xlsx",
     )
     scan_parser.add_argument(
         "--dir", "-d",
@@ -205,7 +205,7 @@ Examples:
     export_parser.add_argument(
         "--format", "-f",
         nargs="+",
-        choices=["pdf", "csv", "json"],
+        choices=["pdf", "csv", "json", "xlsx"],
         default=["pdf"],
         help="Export format(s): pdf, csv, json",
     )

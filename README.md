@@ -129,18 +129,18 @@ aws-costlens scan --profiles <profile> --format pdf csv json --name scan-report
 aws-costlens history --profiles <profile> --format json --name history-report
 ```
 
-### Cost Dashboard Reports (PDF, CSV, JSON)
+### Cost Dashboard Reports (PDF, CSV, JSON, XLSX)
 
 ```bash
 aws-costlens export --profiles <profile> --format pdf --name cost-report
-aws-costlens export --profiles <profile> --format csv json --name cost-report
+aws-costlens export --profiles <profile> --format csv json xlsx --name cost-report
 ```
 
 ### Complete Report Pack
 
 ```bash
 # Dashboard + Scan + History in all formats
-aws-costlens export --profiles <profile> --scan --history --format pdf csv json --name full-report
+aws-costlens export --profiles <profile> --scan --history --format pdf csv json xlsx --name full-report
 ```
 
 ---
@@ -205,7 +205,7 @@ Options:
   --merge             Merge results from same account
   --time-range, -t    last-month | N days | YYYY-MM-DD:YYYY-MM-DD
   --tag               Filter by tag (key=value)
-  --format, -f        pdf | csv | json (default: pdf)
+  --format, -f        pdf | csv | json | xlsx (default: pdf)
   --name, -n          Report file name (default: costlens_report)
   --dir, -d           Output directory
   --scan              Include resource scan

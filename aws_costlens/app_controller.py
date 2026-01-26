@@ -29,6 +29,7 @@ from aws_costlens.aws_api import (
 from aws_costlens.cost_controller import (
     export_to_csv,
     export_to_json,
+    export_to_xlsx,
     get_cost_data,
     get_trend,
 )
@@ -46,6 +47,20 @@ from aws_costlens.visuals import create_trend_bars
 from aws_costlens.models import ProfileData
 
 console = Console(force_terminal=True, legacy_windows=False)
+
+
+def _generate_timestamped_filename(base_name: str, extension: str) -> str:
+    """Generate a filename with timestamp (like aws-finops-dashboard).
+    
+    Args:
+        base_name: Base name for the file (e.g., "cost-report")
+        extension: File extension without dot (e.g., "pdf", "csv", "json")
+    
+    Returns:
+        Filename with timestamp: "{base_name}_{YYYYMMDD_HHMM}.{extension}"
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    return f"{base_name}_{timestamp}.{extension}"
 
 
 def run_dashboard(
@@ -258,13 +273,13 @@ def _run_audit_report(
         for report_type in report_types:
             if report_type == "csv":
                 csv_content = export_audit_report_to_csv(raw_audit_data)
-                export_handler.save_csv(csv_content, f"{report_name}.csv")
+                export_handler.save_csv(csv_content, _generate_timestamped_filename(report_name, "csv"))
             elif report_type == "json":
                 json_content = export_audit_report_to_json(raw_audit_data)
-                export_handler.save_json(json_content, f"{report_name}.json")
+                export_handler.save_json(json_content, _generate_timestamped_filename(report_name, "json"))
             elif report_type == "pdf":
-                pdf_bytes = export_audit_report_to_pdf(audit_data, report_name)
-                export_handler.save_pdf(pdf_bytes, f"{report_name}.pdf")
+                pdf_bytes = export_audit_report_to_pdf(raw_audit_data, report_name)
+                export_handler.save_pdf(pdf_bytes, _generate_timestamped_filename(report_name, "pdf"))
 
 
 def _run_trend_analysis(
@@ -338,24 +353,28 @@ def _run_trend_analysis(
 
         if "json" in report_types:
             json_content = export_trend_data_to_json(raw_trend_data, report_name)
-            export_handler.save_json(json_content, f"{report_name}_trend.json")
+            export_handler.save_json(json_content, _generate_timestamped_filename(f"{report_name}_trend", "json"))
 
 
 def _get_display_table_period_info(
     profiles_to_use: List[str], time_range: Optional[Union[int, str]]
 ) -> Tuple[str, str, str, str]:
     """Get period information for the display table."""
-    if profiles_to_use:
+    for profile in profiles_to_use:
         try:
-            sample_session = boto3.Session(profile_name=profiles_to_use[0])
+            sample_session = boto3.Session(profile_name=profile)
             sample_cost_data = get_cost_data(sample_session, time_range)
             previous_period_name = sample_cost_data.get("previous_period_name", "Last Month Due")
             current_period_name = sample_cost_data.get("current_period_name", "Current Month Cost")
-            previous_period_dates = f"{sample_cost_data['previous_period_start']} to {sample_cost_data['previous_period_end']}"
-            current_period_dates = f"{sample_cost_data['current_period_start']} to {sample_cost_data['current_period_end']}"
+            previous_period_dates = (
+                f"{sample_cost_data['previous_period_start']} to {sample_cost_data['previous_period_end']}"
+            )
+            current_period_dates = (
+                f"{sample_cost_data['current_period_start']} to {sample_cost_data['current_period_end']}"
+            )
             return (previous_period_name, current_period_name, previous_period_dates, current_period_dates)
         except Exception:
-            pass
+            continue
     return "Last Month Due", "Current Month Cost", "N/A", "N/A"
 
 
@@ -495,12 +514,22 @@ def _run_cost_dashboard(
         for report_type in report_types:
             if report_type == "csv":
                 csv_content = export_to_csv(export_data, report_name, previous_period_dates, current_period_dates)
-                export_handler.save_csv(csv_content, f"{report_name}.csv")
+                export_handler.save_csv(csv_content, _generate_timestamped_filename(report_name, "csv"))
             elif report_type == "json":
                 json_content = export_to_json(export_data, report_name)
-                export_handler.save_json(json_content, f"{report_name}.json")
+                export_handler.save_json(json_content, _generate_timestamped_filename(report_name, "json"))
             elif report_type == "pdf":
                 pdf_bytes = export_cost_dashboard_to_pdf(
                     export_data, report_name, previous_period_dates, current_period_dates
                 )
-                export_handler.save_pdf(pdf_bytes, f"{report_name}.pdf")
+                export_handler.save_pdf(pdf_bytes, _generate_timestamped_filename(report_name, "pdf"))
+            elif report_type == "xlsx":
+                xlsx_bytes = export_to_xlsx(
+                    export_data,
+                    report_name,
+                    previous_period_name,
+                    current_period_name,
+                    previous_period_dates,
+                    current_period_dates,
+                )
+                export_handler.save_xlsx(xlsx_bytes, _generate_timestamped_filename(report_name, "xlsx"))

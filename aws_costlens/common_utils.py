@@ -8,18 +8,21 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
-from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter, portrait
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from rich.console import Console
 
 from aws_costlens.pdf_renderer import (
     bulletList,
+    footerParagraph,
     formatServicesForList,
     keyValueTable,
     miniHeader,
     paragraphStyling,
+    profileHeaderCard,
     split_to_items,
 )
 
@@ -68,7 +71,7 @@ def export_cost_dashboard_to_pdf(
     output_path: Optional[str] = None,
 ) -> bytes:
     """
-    Export cost dashboard to PDF format.
+    Export cost dashboard to PDF format with improved styling.
 
     Args:
         export_data: List of profile data dictionaries
@@ -83,67 +86,158 @@ def export_cost_dashboard_to_pdf(
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=letter,
-        rightMargin=0.75 * inch,
-        leftMargin=0.75 * inch,
-        topMargin=0.75 * inch,
-        bottomMargin=0.75 * inch,
+        pagesize=portrait(letter),
+        rightMargin=0.5 * inch,
+        leftMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+        allowSplitting=True,
     )
     styles = getSampleStyleSheet()
     story = []
 
     # Main Title
-    story.append(Paragraph(f"<b>AWS CostLens Report</b>", styles["Heading1"]))
-    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
-    story.append(Spacer(1, 0.3 * inch))
+    story.append(Paragraph("AWS CostLens (Cost Report)", styles["Title"]))
+    story.append(Spacer(1, 10))
 
-    for i, profile_data in enumerate(export_data):
-        if i > 0:
-            story.append(PageBreak())
+    def _profile_separator() -> Table:
+        separator = Table(
+            [[" "]],
+            colWidths=[doc.width],
+            hAlign="LEFT",
+        )
+        separator.setStyle(TableStyle([
+            ("LINEBELOW", (0, 0), (-1, -1), 0.75, colors.HexColor("#BFBFBF")),
+        ]))
+        return separator
 
-        # Profile Title
-        story.append(Paragraph(
-            f"<b>Profile: {profile_data.get('profile', 'N/A')}</b>",
-            styles["Heading2"],
-        ))
-        story.append(Spacer(1, 0.2 * inch))
+    # Period dates header
+    story.append(paragraphStyling(
+        f"<b>Previous Period:</b> {previous_period_dates}<br/>"
+        f"<b>Current Period:</b> {current_period_dates}"
+    ))
+    story.append(Spacer(1, 6))
 
-        # Summary
-        story.append(miniHeader("Summary"))
+    for idx, profile_data in enumerate(export_data):
+        # Header card per profile
+        profile = profile_data.get("profile", "N/A")
+        account_id = profile_data.get("account_id", "N/A")
+        story.append(profileHeaderCard(profile, account_id, doc.width))
+        story.append(Spacer(1, 6))
+
+        # Cost summary with percentage change
         pct = profile_data.get("percent_change_in_total_cost")
-        pct_str = f"{pct:+.1f}%" if pct is not None else "N/A"
-
-        summary_rows = [
-            ("Account ID", profile_data.get("account_id", "N/A")),
-            (f"Current ({current_period_dates})", f"${profile_data.get('current_month', 0):,.2f}"),
-            (f"Previous ({previous_period_dates})", f"${profile_data.get('last_month', 0):,.2f}"),
-            ("Change", pct_str),
+        pct_str = f" ({pct:+.1f}%)" if pct is not None else ""
+        kv_rows = [
+            ("Previous Period Cost", f"<b>${profile_data.get('last_month', 0):,.2f}</b>"),
+            ("Current Period Cost", f"<b>${profile_data.get('current_month', 0):,.2f}</b>{pct_str}"),
         ]
-        story.append(keyValueTable(summary_rows))
-        story.append(Spacer(1, 0.2 * inch))
+        story.append(keyValueTable(kv_rows))
+        story.append(Spacer(1, 6))
 
-        # Top Services - Current
-        story.append(miniHeader("Highest Cost Services - Current Period"))
-        services = profile_data.get("service_costs", [])
-        story.append(bulletList(formatServicesForList(services)))
-        story.append(Spacer(1, 0.2 * inch))
+        # Service comparison table
+        story.append(miniHeader("Service Cost Comparison"))
 
-        # Top Services - Previous
-        story.append(miniHeader("Highest Cost Services - Previous Period"))
         prev_services = profile_data.get("previous_service_costs", [])
-        story.append(bulletList(formatServicesForList(prev_services)))
-        story.append(Spacer(1, 0.2 * inch))
+        curr_services = profile_data.get("service_costs", [])
 
-        # Budgets
-        story.append(miniHeader("Budgets"))
-        budgets = profile_data.get("budget_info", ["No budgets configured"])
-        story.append(bulletList([clean_rich_tags(b) for b in budgets]))
-        story.append(Spacer(1, 0.2 * inch))
+        prev_map = {svc: cost for svc, cost in prev_services}
+        curr_map = {svc: cost for svc, cost in curr_services}
+        services = sorted(set(prev_map) | set(curr_map), key=lambda s: curr_map.get(s, 0), reverse=True)
 
-        # EC2 Summary
-        story.append(miniHeader("EC2 Summary"))
-        ec2 = profile_data.get("ec2_summary_formatted", ["No data"])
-        story.append(bulletList(ec2))
+        table_rows = [
+            [
+                paragraphStyling("<b>Service</b>"),
+                paragraphStyling("<b>Previous</b>"),
+                paragraphStyling("<b>Current</b>"),
+                paragraphStyling("<b>Diff</b>"),
+                paragraphStyling("<b>Diff %</b>"),
+            ]
+        ]
+
+        # Total row
+        prev_total = float(profile_data.get("last_month", 0))
+        curr_total = float(profile_data.get("current_month", 0))
+        total_diff = curr_total - prev_total
+        total_pct = (total_diff / prev_total * 100.0) if abs(prev_total) > 0.0001 else None
+        table_rows.append([
+            paragraphStyling("<b>Total costs</b>"),
+            paragraphStyling(f"<b>${prev_total:,.2f}</b>"),
+            paragraphStyling(f"<b>${curr_total:,.2f}</b>"),
+            paragraphStyling(f"<b>${total_diff:,.2f}</b>"),
+            paragraphStyling(f"<b>{total_pct:+.2f}%</b>" if total_pct is not None else "<b>N/A</b>"),
+        ])
+
+        for svc in services:
+            prev_cost = float(prev_map.get(svc, 0.0))
+            curr_cost = float(curr_map.get(svc, 0.0))
+            if prev_cost < 0.0001 and curr_cost < 0.0001:
+                continue
+            diff = curr_cost - prev_cost
+            diff_pct = (diff / prev_cost * 100.0) if abs(prev_cost) > 0.0001 else None
+            table_rows.append([
+                paragraphStyling(svc),
+                paragraphStyling(f"${prev_cost:,.2f}"),
+                paragraphStyling(f"${curr_cost:,.2f}"),
+                paragraphStyling(f"${diff:,.2f}"),
+                paragraphStyling(f"{diff_pct:+.2f}%" if diff_pct is not None else "N/A"),
+            ])
+
+        service_table = Table(
+            table_rows,
+            colWidths=[2.8 * inch, 1.2 * inch, 1.2 * inch, 1.2 * inch, 1.1 * inch],
+            hAlign="LEFT",
+        )
+        service_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9E1F2")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CCCCCC")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(service_table)
+        story.append(Spacer(1, 8))
+
+        # Budgets and EC2 side-by-side
+        budgets = [clean_rich_tags(b) for b in profile_data.get("budget_info", ["No budgets configured"])]
+        ec2_summary = profile_data.get("ec2_summary", {})
+        ec2_items = [
+            f"{state}: {count}"
+            for state, count in ec2_summary.items()
+            if count > 0
+        ] or ["No instances"]
+
+        info_table = Table(
+            [
+                [paragraphStyling("<b>Budgets</b>"), paragraphStyling("<b>EC2 Summary</b>")],
+                [bulletList(budgets), bulletList(ec2_items)],
+            ],
+            colWidths=[doc.width / 2, doc.width / 2],
+            hAlign="LEFT",
+        )
+        info_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CCCCCC")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(info_table)
+
+        # Add spacing between profiles (not page break for better flow)
+        if idx < len(export_data) - 1:
+            story.append(Spacer(1, 8))
+            story.append(_profile_separator())
+            story.append(Spacer(1, 10))
+
+    # Footer
+    story.append(Spacer(1, 8))
+    footer_text = f"Generated by AWS CostLens on {datetime.now():%Y-%m-%d %H:%M:%S}"
+    story.append(footerParagraph(footer_text))
 
     # Build PDF
     doc.build(story)
@@ -164,7 +258,7 @@ def export_audit_report_to_pdf(
     output_path: Optional[str] = None,
 ) -> bytes:
     """
-    Export audit/scan report to PDF.
+    Export audit/scan report to PDF with improved styling.
 
     Args:
         audit_data: List of audit data dictionaries
@@ -177,69 +271,217 @@ def export_audit_report_to_pdf(
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=letter,
-        rightMargin=0.75 * inch,
-        leftMargin=0.75 * inch,
-        topMargin=0.75 * inch,
-        bottomMargin=0.75 * inch,
+        pagesize=portrait(letter),
+        rightMargin=0.5 * inch,
+        leftMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+        allowSplitting=True,
     )
     styles = getSampleStyleSheet()
     story = []
 
     # Main Title
-    story.append(Paragraph(f"<b>AWS CostLens Audit Report</b>", styles["Heading1"]))
-    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
-    story.append(Spacer(1, 0.3 * inch))
+    story.append(Paragraph("AWS CostLens (Scan Report)", styles["Title"]))
+    story.append(Spacer(1, 8))
 
-    for i, data in enumerate(audit_data):
-        if i > 0:
-            story.append(PageBreak())
+    def _profile_separator() -> Table:
+        separator = Table(
+            [[" "]],
+            colWidths=[doc.width],
+            hAlign="LEFT",
+        )
+        separator.setStyle(TableStyle([
+            ("LINEBELOW", (0, 0), (-1, -1), 0.75, colors.HexColor("#BFBFBF")),
+        ]))
+        return separator
 
+    def _region_header(text: str) -> Table:
+        header = Table(
+            [[paragraphStyling(f"<b>{text}</b>")]],
+            colWidths=[doc.width],
+            hAlign="LEFT",
+        )
+        header.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F2F2")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        return header
+
+    def _chunk_rows(items: List[str], columns: int) -> List[List[str]]:
+        rows = []
+        row = []
+        for item in items:
+            row.append(item)
+            if len(row) == columns:
+                rows.append(row)
+                row = []
+        if row:
+            row.extend([""] * (columns - len(row)))
+            rows.append(row)
+        return rows or [["None"] + [""] * (columns - 1)]
+
+    def _render_region_items(title: str, region_map: Dict[str, List[str]], columns: int = 3) -> None:
+        if title:
+            story.append(miniHeader(title))
+        if not region_map:
+            story.append(paragraphStyling("None found"))
+            story.append(Spacer(1, 6))
+            return
+
+        for region in sorted(region_map.keys()):
+            items = region_map.get(region, []) or []
+            story.append(_region_header(f"{region}:"))
+            table_rows = _chunk_rows(items, columns)
+            table = Table(
+                table_rows,
+                colWidths=[doc.width / columns] * columns,
+                hAlign="LEFT",
+            )
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CCCCCC")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(table)
+            story.append(Spacer(1, 4))
+        story.append(Spacer(1, 6))
+
+    def _render_region_items_wrapped(title: str, region_map: Dict[str, List[str]], columns: int = 2) -> None:
+        if title:
+            story.append(miniHeader(title))
+        if not region_map:
+            story.append(paragraphStyling("None found"))
+            story.append(Spacer(1, 6))
+            return
+
+        for region in sorted(region_map.keys()):
+            items = region_map.get(region, []) or []
+            story.append(_region_header(f"{region}:"))
+            if not items:
+                story.append(paragraphStyling("None found"))
+                story.append(Spacer(1, 4))
+                continue
+
+            row_items = _chunk_rows(items, columns)
+            table_rows = [
+                [paragraphStyling(item) if item else paragraphStyling("") for item in row]
+                for row in row_items
+            ]
+            table = Table(
+                table_rows,
+                colWidths=[doc.width / columns] * columns,
+                hAlign="LEFT",
+            )
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CCCCCC")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(table)
+            story.append(Spacer(1, 4))
+        story.append(Spacer(1, 6))
+
+    for idx, data in enumerate(audit_data):
+        # Header card per profile
         profile = data.get("profile", "Unknown")
-        story.append(Paragraph(f"<b>Profile: {profile}</b>", styles["Heading2"]))
-        story.append(Paragraph(f"Account: {data.get('account_id', 'Unknown')}", styles["Normal"]))
-        story.append(Spacer(1, 0.2 * inch))
+        account_id = data.get("account_id", "Unknown")
+        story.append(profileHeaderCard(profile, account_id, doc.width))
+        story.append(Spacer(1, 6))
 
-        # Stopped Instances
-        story.append(miniHeader("Stopped EC2 Instances"))
-        stopped_str = data.get("stopped_instances", "None")
-        if stopped_str and stopped_str != "None":
-            story.append(bulletList(split_to_items(stopped_str)))
+        # Untagged resources (service -> region -> ids)
+        untagged = data.get("untagged_resources", {})
+        if isinstance(untagged, dict):
+            story.append(miniHeader("Untagged Resources"))
+            has_any = False
+            for service in sorted(untagged.keys()):
+                region_map = untagged.get(service) or {}
+                if not region_map:
+                    continue
+                has_any = True
+                story.append(paragraphStyling(f"<b>{service}</b>"))
+                _render_region_items_wrapped("", region_map, columns=2)
+            if not has_any:
+                story.append(paragraphStyling("None found"))
+                story.append(Spacer(1, 6))
         else:
-            story.append(paragraphStyling("None found"))
-        story.append(Spacer(1, 0.2 * inch))
+            story.append(miniHeader("Untagged Resources"))
+            story.append(bulletList(split_to_items(untagged)))
+            story.append(Spacer(1, 6))
 
-        # Unused Volumes
-        story.append(miniHeader("Unused EBS Volumes"))
-        volumes_str = data.get("unused_volumes", "None")
-        if volumes_str and volumes_str != "None":
-            story.append(bulletList(split_to_items(volumes_str)))
+        # Stopped EC2 instances (region -> ids)
+        stopped = data.get("stopped_instances", {})
+        if isinstance(stopped, dict):
+            _render_region_items("Stopped EC2 Instances", stopped, columns=3)
         else:
-            story.append(paragraphStyling("None found"))
-        story.append(Spacer(1, 0.2 * inch))
+            story.append(miniHeader("Stopped EC2 Instances"))
+            story.append(bulletList(split_to_items(stopped)))
+            story.append(Spacer(1, 6))
 
-        # Unused EIPs
-        story.append(miniHeader("Unused Elastic IPs"))
-        eips_str = data.get("unused_eips", "None")
-        if eips_str and eips_str != "None":
-            story.append(bulletList(split_to_items(eips_str)))
+        # Unused EBS volumes (region -> ids)
+        volumes = data.get("unused_volumes", {})
+        if isinstance(volumes, dict):
+            _render_region_items("Unused EBS Volumes", volumes, columns=3)
         else:
-            story.append(paragraphStyling("None found"))
-        story.append(Spacer(1, 0.2 * inch))
+            story.append(miniHeader("Unused EBS Volumes"))
+            story.append(bulletList(split_to_items(volumes)))
+            story.append(Spacer(1, 6))
 
-        # Untagged Resources
-        story.append(miniHeader("Untagged Resources"))
-        untagged_str = data.get("untagged_resources", "None")
-        if untagged_str and untagged_str != "None":
-            story.append(bulletList(split_to_items(untagged_str)))
+        # Unused EIPs (region -> ids)
+        eips = data.get("unused_eips", {})
+        if isinstance(eips, dict):
+            _render_region_items("Unused Elastic IPs", eips, columns=3)
         else:
-            story.append(paragraphStyling("None found"))
-        story.append(Spacer(1, 0.2 * inch))
+            story.append(miniHeader("Unused Elastic IPs"))
+            story.append(bulletList(split_to_items(eips)))
+            story.append(Spacer(1, 6))
 
         # Budget Alerts
         story.append(miniHeader("Budget Alerts"))
-        alerts_str = data.get("budget_alerts", "No budgets exceeded")
-        story.append(paragraphStyling(alerts_str))
+        budget_alerts = data.get("budget_alerts", "No budgets exceeded")
+        if isinstance(budget_alerts, list):
+            if not budget_alerts:
+                story.append(paragraphStyling("No budgets exceeded"))
+            else:
+                budget_lines = []
+                for b in budget_alerts:
+                    if isinstance(b, dict):
+                        if b.get("actual", 0) > b.get("limit", 0):
+                            budget_lines.append(
+                                f"{b.get('name', 'Budget')}: "
+                                f"${b.get('actual', 0):,.2f} > ${b.get('limit', 0):,.2f}"
+                            )
+                    else:
+                        budget_lines.append(str(b))
+                story.append(bulletList(budget_lines or ["No budgets exceeded"]))
+        else:
+            story.append(bulletList(split_to_items(budget_alerts)))
+        story.append(Spacer(1, 6))
+
+        # Add spacing between profiles
+        if idx < len(audit_data) - 1:
+            story.append(Spacer(1, 8))
+            story.append(_profile_separator())
+            story.append(Spacer(1, 10))
+
+    # Footer
+    story.append(Spacer(1, 8))
+    footer_note = (
+        "Note: This scan checks stopped EC2, unattached EBS volumes, unused EIPs, "
+        "untagged EC2/RDS/Lambda/ELBv2 resources, and budget alerts."
+    )
+    story.append(footerParagraph(footer_note))
+    footer_text = f"Generated by AWS CostLens on {datetime.now():%Y-%m-%d %H:%M:%S}"
+    story.append(footerParagraph(footer_text))
 
     doc.build(story)
     buffer.seek(0)
@@ -248,7 +490,7 @@ def export_audit_report_to_pdf(
     if output_path:
         with open(output_path, "wb") as f:
             f.write(pdf_bytes)
-        console.print(f"[green]✓ Audit PDF saved to {output_path}[/]")
+        console.print(f"[green]✓ Scan PDF saved to {output_path}[/]")
 
     return pdf_bytes
 

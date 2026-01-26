@@ -7,11 +7,22 @@ from reportlab.platypus import (
     ListFlowable,
     ListItem,
 )
+from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from typing import List
 
 styles = getSampleStyleSheet()
+
+# Custom style for footer
+pdf_footer_style = ParagraphStyle(
+    name="PDF_Footer",
+    parent=styles["Normal"],
+    fontSize=8,
+    textColor=colors.grey,
+    alignment=1,  # Center
+    leading=10,
+)
 
 
 def paragraphStyling(text: str, style_name="BodyText", font_size=9, leading=11):
@@ -69,3 +80,38 @@ def split_to_items(value: str) -> List[str]:
         return ["None"]
     items = [line.strip() for line in value.splitlines() if line.strip()]
     return items or ["None"]
+
+
+def profileHeaderCard(profile: str, account_id: str, doc_width: float):
+    """Create a styled header card for a profile section.
+    
+    Args:
+        profile: AWS profile name
+        account_id: AWS account ID
+        doc_width: Document width for proper sizing
+    
+    Returns:
+        Table flowable with styled header
+    """
+    header_content = paragraphStyling(
+        f"<b>Profile:</b> {profile} &nbsp;&nbsp;&nbsp; <b>Account:</b> {account_id}"
+    )
+    header_tbl = Table(
+        [[header_content]],
+        colWidths=[doc_width],
+        hAlign="LEFT",
+    )
+    header_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+        ("BOX", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return header_tbl
+
+
+def footerParagraph(text: str):
+    """Create a footer paragraph with footer styling."""
+    return Paragraph(text, pdf_footer_style)

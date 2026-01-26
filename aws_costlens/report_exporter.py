@@ -132,6 +132,14 @@ class ExportHandler:
         """Save PDF content."""
         return self.save(content, filename, "application/pdf")
 
+    def save_xlsx(self, content: bytes, filename: str) -> str:
+        """Save XLSX content."""
+        return self.save(
+            content,
+            filename,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
 
 def get_pdf_output() -> BytesIO:
     """Get a BytesIO buffer for PDF output."""

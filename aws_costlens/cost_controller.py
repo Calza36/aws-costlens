@@ -2,10 +2,12 @@
 
 import csv
 import json
+import re
 from datetime import datetime, timedelta
-from io import StringIO
+from io import BytesIO, StringIO
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import xlsxwriter
 from boto3.session import Session
 from botocore.exceptions import ClientError
 from rich.console import Console
@@ -263,73 +265,73 @@ def export_to_csv(
     previous_period_dates: str,
     current_period_dates: str,
 ) -> str:
-    """Export cost data to CSV format."""
+    """Export cost data to CSV format (summary view - one row per account).
+    
+    This format is more Excel-friendly, with each account on one row and
+    multi-line data (services, budgets) within single cells.
+    """
     output = StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow(["AWS CostLens Report"])
-    writer.writerow(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-    writer.writerow([])
-
-    writer.writerow(["Profile", "Account ID", "Section", "Item", "Value"])
-
+    
+    # Build dynamic column headers with period dates
+    previous_period_header = f"Previous Period Cost\n({previous_period_dates})"
+    current_period_header = f"Current Period Cost\n({current_period_dates})"
+    
+    fieldnames = [
+        "CLI Profile",
+        "AWS Account ID",
+        previous_period_header,
+        current_period_header,
+        "Change %",
+        "Previous Period Cost By Service",
+        "Current Period Cost By Service",
+        "Budget Status",
+        "EC2 Instances",
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
     for profile_data in export_data:
-        profile = profile_data.get("profile", "N/A")
-        account_id = profile_data.get("account_id", "N/A")
-
-        # Summary section
-        writer.writerow([
-            profile,
-            account_id,
-            "Summary",
-            f"Previous ({previous_period_dates})",
-            f"${profile_data.get('last_month', 0):,.2f}",
-        ])
-        writer.writerow([
-            profile,
-            account_id,
-            "Summary",
-            f"Current ({current_period_dates})",
-            f"${profile_data.get('current_month', 0):,.2f}",
-        ])
-        pct = profile_data.get("percent_change_in_total_cost")
-        if pct is not None:
-            writer.writerow([profile, account_id, "Summary", "Change", f"{pct:+.2f}%"])
-
-        # Previous period services
+        # Format previous services as multi-line string
         prev_services = profile_data.get("previous_service_costs", [])
-        if prev_services:
-            for service, cost in prev_services:
-                writer.writerow([profile, account_id, "Previous Service Costs", service, f"${cost:,.2f}"])
-        else:
-            writer.writerow([profile, account_id, "Previous Service Costs", "None", ""])
-
-        # Current period services
+        prev_services_str = "\n".join(
+            f"{service}: ${cost:,.2f}" for service, cost in prev_services
+        ) or "No costs"
+        
+        # Format current services as multi-line string
         curr_services = profile_data.get("service_costs", [])
-        if curr_services:
-            for service, cost in curr_services:
-                writer.writerow([profile, account_id, "Current Service Costs", service, f"${cost:,.2f}"])
-        else:
-            writer.writerow([profile, account_id, "Current Service Costs", "None", ""])
-
-        # Budgets
+        curr_services_str = "\n".join(
+            f"{service}: ${cost:,.2f}" for service, cost in curr_services
+        ) or "No costs"
+        
+        # Format budgets as multi-line string
         budgets = profile_data.get("budget_info", [])
-        if budgets:
-            for budget_line in budgets:
-                writer.writerow([profile, account_id, "Budgets", "", budget_line])
-        else:
-            writer.writerow([profile, account_id, "Budgets", "None", ""])
-
-        # EC2 summary
+        budgets_str = "\n".join(budgets) if budgets else "No budgets"
+        
+        # Format EC2 summary as multi-line string
         ec2_summary = profile_data.get("ec2_summary", {})
-        if ec2_summary:
-            for state in sorted(ec2_summary.keys()):
-                writer.writerow([profile, account_id, "EC2 Summary", state, str(ec2_summary[state])])
-        else:
-            writer.writerow([profile, account_id, "EC2 Summary", "None", ""])
-
-        writer.writerow([])
-
+        ec2_str = "\n".join(
+            f"{state}: {count}" 
+            for state, count in ec2_summary.items() 
+            if count > 0
+        ) or "No instances"
+        
+        # Format percentage change
+        pct = profile_data.get("percent_change_in_total_cost")
+        pct_str = f"{pct:+.2f}%" if pct is not None else "N/A"
+        
+        writer.writerow({
+            "CLI Profile": profile_data.get("profile", "N/A"),
+            "AWS Account ID": profile_data.get("account_id", "N/A"),
+            previous_period_header: f"${profile_data.get('last_month', 0):,.2f}",
+            current_period_header: f"${profile_data.get('current_month', 0):,.2f}",
+            "Change %": pct_str,
+            "Previous Period Cost By Service": prev_services_str,
+            "Current Period Cost By Service": curr_services_str,
+            "Budget Status": budgets_str,
+            "EC2 Instances": ec2_str,
+        })
+    
     return output.getvalue()
 
 
@@ -359,3 +361,219 @@ def export_to_json(
         output["profiles"].append(profile_output)
     
     return json.dumps(output, indent=2)
+
+
+def export_to_xlsx(
+    export_data: List[Dict],
+    report_name: str,
+    previous_period_name: str,
+    current_period_name: str,
+    previous_period_dates: str,
+    current_period_dates: str,
+) -> bytes:
+    """Export cost data to XLSX format (one sheet per account + global sheet)."""
+
+    def safe_sheet_name(name: str, fallback: str, used_names: set) -> str:
+        cleaned = re.sub(r"[\[\]\*:/\\?]", "", name).strip()
+        if not cleaned:
+            cleaned = fallback
+        cleaned = cleaned[:31]
+        base = cleaned
+        counter = 1
+        while cleaned in used_names:
+            suffix = f"_{counter}"
+            cleaned = (base[: 31 - len(suffix)] + suffix) if len(base) > 31 - len(suffix) else base + suffix
+            counter += 1
+        used_names.add(cleaned)
+        return cleaned
+
+    def build_service_rows(previous_services: List[Tuple[str, float]], current_services: List[Tuple[str, float]]):
+        prev_map = {svc: cost for svc, cost in previous_services}
+        curr_map = {svc: cost for svc, cost in current_services}
+        services = set(prev_map) | set(curr_map)
+
+        rows = []
+        for svc in services:
+            prev_cost = float(prev_map.get(svc, 0.0))
+            curr_cost = float(curr_map.get(svc, 0.0))
+            if prev_cost < 0.0001 and curr_cost < 0.0001:
+                continue
+            diff = curr_cost - prev_cost
+            if abs(prev_cost) < 0.0001:
+                diff_pct = None if abs(curr_cost) > 0.0001 else 0.0
+            else:
+                diff_pct = diff / prev_cost
+            rows.append((svc, prev_cost, curr_cost, diff, diff_pct))
+
+        rows.sort(key=lambda r: r[2], reverse=True)  # Sort by current cost
+        return rows
+
+    def write_cost_sheet(
+        workbook,
+        sheet_name: str,
+        title: str,
+        account_name: str,
+        account_id: str,
+        prev_total: float,
+        curr_total: float,
+        previous_services: List[Tuple[str, float]],
+        current_services: List[Tuple[str, float]],
+        table_name: str,
+    ) -> None:
+        worksheet = workbook.add_worksheet(sheet_name)
+
+        # Formats
+        title_fmt = workbook.add_format({"bold": True, "font_size": 14, "bg_color": "#FCE4D6"})
+        meta_fmt = workbook.add_format({"bold": True})
+        note_fmt = workbook.add_format({"italic": True, "font_color": "#666666"})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#D9E1F2", "border": 1})
+        currency_fmt = workbook.add_format({"num_format": "$#,##0.00"})
+        percent_fmt = workbook.add_format({"num_format": "0.00%"})
+
+        worksheet.set_column(0, 0, 42)
+        worksheet.set_column(1, 3, 18)
+        worksheet.set_column(4, 4, 18)
+
+        row = 0
+        worksheet.write(row, 0, title, title_fmt)
+        row += 1
+        worksheet.write(row, 0, f"Account Name: {account_name}", meta_fmt)
+        row += 1
+        worksheet.write(row, 0, f"Account ID: {account_id}", meta_fmt)
+        row += 1
+        worksheet.write(row, 0, f"Total Cost (both periods): ${prev_total + curr_total:,.2f}", meta_fmt)
+        row += 1
+        worksheet.write(row, 0, "Includes costs from ALL regions", note_fmt)
+        row += 1
+        worksheet.write(row, 0, "Services with $0.00 in both periods excluded", note_fmt)
+        row += 2
+
+        table_rows = []
+        service_rows = build_service_rows(previous_services, current_services)
+
+        # Total row
+        total_diff = curr_total - prev_total
+        total_pct = (total_diff / prev_total) if abs(prev_total) > 0.0001 else None
+        table_rows.append((
+            "Total costs (All Regions)",
+            prev_total,
+            curr_total,
+            total_diff,
+            total_pct,
+        ))
+        table_rows.extend(service_rows)
+
+        header_row = row
+        columns = [
+            {"header": "Service", "format": header_fmt},
+            {"header": f"{previous_period_name} (Global)", "format": header_fmt},
+            {"header": f"{current_period_name} (Global)", "format": header_fmt},
+            {"header": "Cost difference", "format": header_fmt},
+            {"header": "Cost difference (%)", "format": header_fmt},
+        ]
+
+        last_row = header_row + len(table_rows)
+        worksheet.add_table(
+            header_row,
+            0,
+            last_row,
+            4,
+            {
+                "name": table_name,
+                "columns": columns,
+                "data": table_rows,
+                "style": "Table Style Light 9",
+                "autofilter": True,
+            },
+        )
+
+        # Apply number formats to data rows
+        if table_rows:
+            worksheet.set_row(header_row, None, header_fmt)
+            worksheet.set_column(1, 3, 18, currency_fmt)
+            worksheet.set_column(4, 4, 18, percent_fmt)
+
+            # Conditional formatting for percent change
+            worksheet.conditional_format(
+                header_row + 1,
+                4,
+                last_row,
+                4,
+                {
+                    "type": "cell",
+                    "criteria": ">",
+                    "value": 0,
+                    "format": workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"}),
+                },
+            )
+            worksheet.conditional_format(
+                header_row + 1,
+                4,
+                last_row,
+                4,
+                {
+                    "type": "cell",
+                    "criteria": "<",
+                    "value": 0,
+                    "format": workbook.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"}),
+                },
+            )
+
+            worksheet.freeze_panes(header_row + 1, 1)
+
+    output = BytesIO()
+    workbook = xlsxwriter.Workbook(output, {"in_memory": True})
+
+    used_names = set()
+    table_counter = 1
+
+    # Global sheet (aggregate all profiles)
+    global_prev_total = sum(p.get("last_month", 0) for p in export_data)
+    global_curr_total = sum(p.get("current_month", 0) for p in export_data)
+    global_prev_services: Dict[str, float] = {}
+    global_curr_services: Dict[str, float] = {}
+
+    for profile in export_data:
+        for svc, cost in profile.get("previous_service_costs", []):
+            global_prev_services[svc] = global_prev_services.get(svc, 0) + float(cost)
+        for svc, cost in profile.get("service_costs", []):
+            global_curr_services[svc] = global_curr_services.get(svc, 0) + float(cost)
+
+    global_title = f"AWS Global Cost Comparison: {previous_period_name} vs {current_period_name}"
+    global_sheet = safe_sheet_name("Global Cost Comparison", "Global", used_names)
+    write_cost_sheet(
+        workbook=workbook,
+        sheet_name=global_sheet,
+        title=global_title,
+        account_name="All Accounts",
+        account_id="Multiple",
+        prev_total=global_prev_total,
+        curr_total=global_curr_total,
+        previous_services=list(global_prev_services.items()),
+        current_services=list(global_curr_services.items()),
+        table_name=f"CostTable{table_counter}",
+    )
+    table_counter += 1
+
+    # One sheet per account/profile
+    for profile_data in export_data:
+        profile_name = profile_data.get("profile", "Unknown")
+        account_id = profile_data.get("account_id", "Unknown")
+        sheet_name = safe_sheet_name(profile_name, f"Account{table_counter}", used_names)
+        write_cost_sheet(
+            workbook=workbook,
+            sheet_name=sheet_name,
+            title="Global Cost Analysis",
+            account_name=profile_name,
+            account_id=account_id,
+            prev_total=float(profile_data.get("last_month", 0)),
+            curr_total=float(profile_data.get("current_month", 0)),
+            previous_services=profile_data.get("previous_service_costs", []),
+            current_services=profile_data.get("service_costs", []),
+            table_name=f"CostTable{table_counter}",
+        )
+        table_counter += 1
+
+    workbook.close()
+    output.seek(0)
+    return output.read()
